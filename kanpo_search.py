@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import argparse
+import configparser
 import fnmatch
 import os
 import platform
@@ -36,14 +37,9 @@ __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
 
-if getattr(sys, "frozen", False):
-    # PyInstallerでEXE化した場合
-    SCR_PATH = Path(sys.executable).resolve()
-else:
-    # Pythonスクリプトとして実行した場合
-    SCR_PATH = Path(__file__).resolve()
-
+SCR_PATH = Path(__file__).resolve()
 DEFAULT_INI = SCR_PATH.with_suffix(".ini")
+
 
 def get_ini_dict_val() -> ini.IniDict:
     """INIのデフォルト値と型を定義する。"""
@@ -65,37 +61,42 @@ def get_ini_dict_val() -> ini.IniDict:
     }
 
 
+def create_default_ini(ini_path: Path) -> None:
+    """INIファイルが存在しない場合、デフォルト設定で作成する。"""
+    ini_path.parent.mkdir(parents=True, exist_ok=True)
+    text = """; 官報検索設定
+; 日本語UTF-8で保存してください。
+
+[官報]
+; 裁判所はワイルドカード * と ? に対応
+; 複数指定する場合はカンマ区切り
+裁判所=*地方裁判所*
+
+; 今回の官報は4段組
+段組数=4
+
+; OCRで抽出対象にする公告名
+; 複数指定する場合はカンマ区切り
+公告=破産手続開始,破産手続開始及び免責許可申立てに関する意見申述期間
+
+[OCR]
+; 空欄ならPATHまたは標準的なWindowsインストール先を検索
+実行ファイル=
+言語=jpn
+PSM=6
+解像度=300
+
+[出力]
+文字コード=utf-8
+"""
+    ini_path.write_text(text, encoding="utf-8")
+    print(f"INIファイルを作成しました: {ini_path}")
+
+
 def read_ini(ini_path: Path):
     """ini_cfg_parserで設定を読み込む。"""
     parser = ini.IniParser(str(ini_path), get_ini_dict_val(), "utf8")
     return parser
-
-
-def create_default_ini(ini_path: Path) -> None:
-    """INIが存在しない場合にデフォルト値でINIを作成する。"""
-    ini_values = get_ini_dict_val()
-
-    lines = []
-
-    for section, values in ini_values.items():
-        lines.append(f"[{section}]")
-
-        for key, value in values.items():
-            default_value = value["inf"]
-
-            if isinstance(default_value, list):
-                default_value = ",".join(str(x) for x in default_value)
-            else:
-                default_value = str(default_value)
-
-            lines.append(f"{key}={default_value}")
-
-        lines.append("")
-
-    ini_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(ini_path, "w", encoding="utf-8") as fp:
-        fp.write("\n".join(lines))
 
 
 def split_patterns(value):
@@ -219,6 +220,7 @@ def process_pdf(pdf_path, ini_path, name):
 
     with fitz.open(pdf_path) as document:
         for page_no, page in enumerate(document, start=1):
+            # PDFを指定DPIで画像化する。
             matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
 
@@ -226,9 +228,11 @@ def process_pdf(pdf_path, ini_path, name):
             column_width = page_width / columns
 
             for column_no in range(columns):
+                # 4段組など、INI指定の列数で分割する。
                 left = int(column_width * column_no)
                 right = int(column_width * (column_no + 1))
 
+                # 列画像を一時ファイルへ保存。
                 clip = fitz.Rect(
                     column_no * page.rect.width / columns,
                     0,
@@ -264,14 +268,18 @@ def process_pdf(pdf_path, ini_path, name):
                 if not text:
                     continue
 
+                # 公告名で一次判定。
                 if not contains_announcement(text, announcement_patterns):
                     continue
 
                 court = extract_court(text)
 
+                # 裁判所はINIのワイルドカードで判定。
                 if court and not wildcard_match(court, court_patterns):
                     continue
 
+                # 裁判所名をOCRで取得できなかった場合は、指定文字列そのものが
+                # OCR結果に存在するかも確認する。
                 if not court:
                     if not any(
                         pattern.replace("*", "") in text
@@ -280,6 +288,7 @@ def process_pdf(pdf_path, ini_path, name):
                     ):
                         continue
 
+                # -n指定時は氏名を必須条件にする。
                 if name and name not in text:
                     continue
 
@@ -293,7 +302,7 @@ def process_pdf(pdf_path, ini_path, name):
                 )
 
     with open(output_path, "w", encoding=output_encoding) as fp:
-        fp.write("検索結果\n")
+        fp.write(f"検索結果\n")
         fp.write(f"入力PDF: {pdf_path}\n")
         fp.write(f"裁判所: {', '.join(court_patterns)}\n")
         fp.write(f"氏名: {name if name else '指定なし'}\n")
@@ -362,14 +371,18 @@ def main(args=None) -> None:
         return NG_VAL
 
     if not ini_path.is_file():
-        print(f"INIファイルがありません。デフォルト値で作成します: {ini_path}")
-        try:
-            create_default_ini(ini_path)
-        except Exception as e:
-            print(f"INIファイルの作成に失敗しました: {e}")
+        # -c未指定の既定INIは自動作成する。
+        if parsed.config == str(DEFAULT_INI):
+            try:
+                create_default_ini(ini_path)
+            except OSError as e:
+                print(f"INIファイルの作成に失敗しました: {ini_path}")
+                print(f"ERROR: {e}")
+                return NG_VAL
+        else:
+            # -cで明示指定したINIが無い場合はエラーとする。
+            print(f"指定されたINIファイルが見つかりません: {ini_path}")
             return NG_VAL
-
-        print(f"INIファイルを作成しました: {ini_path}")
 
     try:
         return process_pdf(pdf_path, ini_path, parsed.name)
