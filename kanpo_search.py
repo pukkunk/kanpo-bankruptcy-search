@@ -29,10 +29,19 @@ except ImportError as e:
     print(msg)
     raise SystemExit(1)
 
+try:
+    from PIL import Image
+except ImportError as e:
+    msg = "The 'Pillow' package is required but not installed.\n"  #修正
+    msg += "You can install it with: python -m pip install Pillow\n"  #修正
+    msg += f"Details: {e}"
+    print(msg)
+    raise SystemExit(1)
+
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.1, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.2, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -954,6 +963,7 @@ def get_ini_dict_val():
             "言語": {"type": str, "inf": "jpn"},
             "PSM": {"type": int, "inf": 6},
             "解像度": {"type": int, "inf": 300},
+            "中間データ出力": {"type": int, "inf": 0},
         },
         "出力": {
             "文字コード": {"type": str, "inf": "utf-8"},
@@ -986,6 +996,7 @@ def create_default_ini(ini_path: Path) -> None:
         "言語=jpn",
         "PSM=6",
         "解像度=300",
+        "中間データ出力=0",
         "",
         "[出力]",
         "文字コード=utf-8",
@@ -1066,6 +1077,21 @@ def normalize_heading(text):
     return re.sub(r"\s+", "", text).strip()
 
 
+def heading_line_matches(compact, normalized_heading):
+    """OCRで見出し末尾に混入する段番号・罫線由来文字などを許容して判定する。"""
+    if compact == normalized_heading:
+        return True
+    if not compact.startswith(normalized_heading):
+        return False
+
+    # 官報OCRでは「破産手続開始 1 i」のように、見出しの後ろへ
+    # 段番号や罫線由来の短い文字が混入することがある。
+    suffix = compact[len(normalized_heading):]
+    if len(suffix) > 4:
+        return False
+    return bool(re.fullmatch(r"[0-9０-９|｜:：iIlTt!]+", suffix))
+
+
 def find_announcement_starts(stream):
     """官報掲載項目一覧から、公告見出しの開始位置を検出する。"""
     lines = stream.splitlines(keepends=True)
@@ -1083,10 +1109,11 @@ def find_announcement_starts(stream):
             offset += len(line)
             continue
 
-        # 1行で見出しになっている場合。
         compact = normalize_heading(line_text)
+
+        # 1行で見出しになっている場合。
         for normalized, heading in normalized_headings:
-            if compact == normalized:
+            if heading_line_matches(compact, normalized):
                 starts.append((offset, heading))
                 break
         else:
@@ -1099,7 +1126,7 @@ def find_announcement_starts(stream):
                 joined += normalize_heading(next_line)
                 found = False
                 for normalized, heading in normalized_headings:
-                    if joined == normalized:
+                    if heading_line_matches(joined, normalized):
                         starts.append((offset, heading))
                         found = True
                         break
@@ -1150,16 +1177,75 @@ def extract_court(text):
 
 
 def court_matches(text, court_patterns):
-    """公告全体を検索して裁判所を判定する。"""
-    court = extract_court(text)
-    if court:
-        return wildcard_match(court, court_patterns), court
+    """公告本文の各行を調べ、指定した裁判所パターンに一致する行を探す。"""
+    # OCRでは裁判所名の一部が誤認識されることがあるため、
+    # 最初に見つかった「地方裁判所」だけで判定しない。各行を順番に調べる。
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "地方裁判所" not in line and "家庭裁判所" not in line:
+            continue
+        if wildcard_match(line, court_patterns):
+            return True, line
 
+    # OCRで「裁判所」の一部が欠落した場合などの保険。
+    compact_text = normalize_heading(text)
     for pattern in court_patterns:
         literal = pattern.replace("*", "").replace("?", "")
-        if literal and literal in text:
+        if literal and literal in compact_text:
             return True, ""
     return False, ""
+
+
+def detect_body_horizontal_bounds(image, columns):
+    """ページ上下に連続する縦罫線を検出し、本文領域の左右端を返す。"""
+    gray = image.convert("L")
+    width, height = gray.size
+
+    # 黒画素の総数ではなく、各x列で上下方向に連続する黒画素の最長区間を調べる。
+    # 左右の本文境界線は途中で途切れないという前提で、ページ高の75%以上の連続線を候補にする。
+    threshold = 100
+    min_run = int(height * 0.75)
+    pixels = gray.load()
+    candidate_x = []
+    for x in range(width):
+        longest_run = 0
+        current_run = 0
+        for y in range(height):
+            if pixels[x, y] < threshold:
+                current_run += 1
+                if current_run > longest_run:
+                    longest_run = current_run
+            else:
+                current_run = 0
+        if longest_run >= min_run:
+            candidate_x.append(x)
+
+    # 太い縦罫線で隣接列が複数候補になる場合は、ひとつの線としてまとめる。
+    groups = []
+    for x in candidate_x:
+        if not groups or x > groups[-1][-1] + 2:
+            groups.append([x])
+        else:
+            groups[-1].append(x)
+    line_positions = [round(sum(group) / len(group)) for group in groups]
+
+    # ページ端の枠線などを避け、本文幅として十分離れた最外側の線を左右端にする。
+    if len(line_positions) < 2:
+        raise ValueError(
+            f"本文左右端の連続縦罫線を検出できません。"
+            f"最長連続線の閾値={min_run}px、検出候補={line_positions}"
+        )
+    left = line_positions[0]
+    right = line_positions[-1]
+    if right - left < width * 0.4:
+        raise ValueError("検出した本文領域がページ幅に対して狭すぎます。")
+    print(
+        f"  本文境界検出: 左={left}, 右={right}, "
+        f"上下連続縦罫線候補={line_positions}, 最小連続長={min_run}px, 段数={columns}"
+    )
+    return left, right
 
 
 def process_pdf(pdf_path, ini_path, name):
@@ -1173,6 +1259,7 @@ def process_pdf(pdf_path, ini_path, name):
     language = ini_parser.get("OCR", "言語")
     psm = ini_parser.get("OCR", "PSM")
     dpi = ini_parser.get("OCR", "解像度")
+    intermediate_output = ini_parser.get("OCR", "中間データ出力")
     output_encoding = ini_parser.get("出力", "文字コード")
 
     if columns < 1:
@@ -1180,6 +1267,10 @@ def process_pdf(pdf_path, ini_path, name):
 
     tesseract = find_tesseract(tesseract_path)
     output_path = pdf_path.with_suffix(".txt")
+    ocr_output_path = pdf_path.with_name(pdf_path.stem + "_ocr.txt")
+
+    if intermediate_output not in (0, 1):
+        raise ValueError("[OCR] 中間データ出力は0または1を指定してください。")
 
     print(f"入力PDF : {pdf_path}")
     print(f"INI     : {ini_path}")
@@ -1187,31 +1278,54 @@ def process_pdf(pdf_path, ini_path, name):
     print(f"公告    : {', '.join(announcement_patterns)}")
     print(f"段組数  : {columns}")
     print(f"OCR     : {tesseract}")
+    print(f"中間データ出力: {intermediate_output}")
     print(f"氏名    : {name if name else '指定なし'}")
 
-    # 全ページ・全段を読み順にOCRする。
+    # 全ページを確認し、横向きページ（縦段組み）のみOCRする。
+    # 官報では、横向きページを縦段組み、縦向きページを横段組みとして扱う。
     chunks = []
+    skipped_portrait_pages = 0
+    processed_landscape_pages = 0
     with fitz.open(pdf_path) as document:
         for page_no, page in enumerate(document, start=1):
+            # page.rectはページの向きを反映した幅・高さを返す。
+            if page.rect.width <= page.rect.height:
+                skipped_portrait_pages += 1
+                print(
+                    f"ページ {page_no}: 縦向き "
+                    f"({page.rect.width:.1f} x {page.rect.height:.1f}) のため除外"
+                )
+                continue
+
+            processed_landscape_pages += 1
             matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
 
+            # page.rectの座標でclipすると、回転ページでは表示画像との位置がずれる。
+            # まずページ全体を回転反映済みの画像として描画し、その画素幅を分割する。
+            full_pix = page.get_pixmap(matrix=matrix, alpha=False)
+            full_image = Image.frombytes(
+                "RGB", (full_pix.width, full_pix.height), full_pix.samples
+            )
+            pixel_width, pixel_height = full_image.size
+
+            # 固定割合で余白を除外せず、画像内の長い縦罫線から本文左右端を検出する。
+            # 右側の余白境界と、左側の日付・官報名・号数欄との境界を線の位置で判定する。
+            content_left, content_right = detect_body_horizontal_bounds(full_image, columns)
+            content_width = content_right - content_left
+            if content_width <= 0:
+                raise ValueError(f"ページ {page_no}: 本文領域の幅が不正です。")
+
             for column_no in range(columns):
-                clip = fitz.Rect(
-                    column_no * page.rect.width / columns,
-                    0,
-                    (column_no + 1) * page.rect.width / columns,
-                    page.rect.height,
-                )
-                column_pix = page.get_pixmap(
-                    matrix=matrix,
-                    clip=clip,
-                    alpha=False,
-                )
+                # 左の欄・右余白を除外した本文領域を段数で分割する。
+                # 端数は各境界を個別に丸め、隙間や重複を避ける。
+                left = content_left + round(column_no * content_width / columns)
+                right = content_left + round((column_no + 1) * content_width / columns)
+                column_image = full_image.crop((left, 0, right, pixel_height))
 
                 image_path = pdf_path.parent / (
                     f".{pdf_path.stem}_p{page_no:04d}_c{column_no + 1}.png"
                 )
-                column_pix.save(str(image_path))
+                column_image.save(str(image_path))
 
                 try:
                     text = normalize_text(
@@ -1232,6 +1346,11 @@ def process_pdf(pdf_path, ini_path, name):
                         }
                     )
 
+    print(
+        f"ページ向き判定: 横向き {processed_landscape_pages} ページを処理、"
+        f"縦向き {skipped_portrait_pages} ページを除外"
+    )
+
     # 各段の境界を保持しつつ、OCR文字列を1本の連続ストリームにする。
     # 公告が段やページをまたいでも途中で切らず、次の公告まで保持する。
     stream_parts = []
@@ -1248,6 +1367,18 @@ def process_pdf(pdf_path, ini_path, name):
         cursor = end
 
     stream = "".join(stream_parts)
+
+    # 中間OCRデータを、入力PDFと同じフォルダーに保存する。
+    # ページ・段番号を残すため、検索処理とは独立した確認用データとする。
+    if intermediate_output == 1:
+        with open(ocr_output_path, "w", encoding=output_encoding) as fp:
+            fp.write(f"入力PDF: {pdf_path}\n")
+            fp.write("=" * 80 + "\n\n")
+            for chunk in chunks:
+                fp.write(f"[ページ={chunk['page']}, 段={chunk['column']}]\n")
+                fp.write(chunk["text"])
+                fp.write("\n\n")
+        print(f"中間OCR TXT: {ocr_output_path}")
 
     # 「次の公告開始」までを現在の公告として保持する。
     raw_records = split_announcements(stream)
