@@ -32,8 +32,8 @@ except ImportError as e:
 try:
     from PIL import Image
 except ImportError as e:
-    msg = "The 'Pillow' package is required but not installed.\n"  #修正
-    msg += "You can install it with: python -m pip install Pillow\n"  #修正
+    msg = "The 'Pillow' package is required but not installed.\n"
+    msg += "You can install it with: python -m pip install Pillow\n"
     msg += f"Details: {e}"
     print(msg)
     raise SystemExit(1)
@@ -41,7 +41,7 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.2, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.1, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -951,6 +951,78 @@ ANNOUNCEMENT_HEADINGS = [
 ]
 
 
+def main(args=None) -> None:
+    parser = argparse.ArgumentParser(
+        prog=SCR_PATH.name,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            f"""\
+            version={__version__}
+            官報をOCRでテキスト化し、
+            INIで指定した裁判所と、必要に応じて氏名で抽出します。
+
+            官報掲載項目の固定一覧を公告境界のマスターとして使用し、
+            次の段・次のページに続く同一公告は結合します。
+
+            Copyright :{__copyright__}
+            author :{__author__}
+            """
+        ),
+    )
+    parser.add_argument(
+        "-v", "--version", action="version",
+        version=f"{SCR_PATH.name} version={__version__}",
+    )
+    parser.add_argument(
+        "input_pdf",
+        nargs="+",
+        help="入力する官報PDF（複数指定可）",
+    )
+    parser.add_argument(
+        "-n", "--name",
+        help="氏名。指定した場合は裁判所 AND 氏名で絞り込みます。",
+    )
+    parser.add_argument(
+        "-c", "--config",
+        default=str(DEFAULT_INI),
+        help=f"INIファイル。既定値: {DEFAULT_INI.name}",
+    )
+
+    parsed = parser.parse_args(args)
+    ini_path = Path(parsed.config).resolve()
+
+    if not ini_path.is_file():
+        # -c未指定の既定INIは自動作成する。
+        if parsed.config == str(DEFAULT_INI):
+            try:
+                create_default_ini(ini_path)
+            except OSError as e:
+                print(f"INIファイルの作成に失敗しました: {ini_path}")
+                print(f"ERROR: {e}")
+                return NG_VAL
+        else:
+            print(f"指定されたINIファイルが見つかりません: {ini_path}")
+            return NG_VAL
+
+    result = OK_VAL
+    for input_pdf in parsed.input_pdf:
+        pdf_path = Path(input_pdf).resolve()
+
+        if not pdf_path.is_file():
+            print(f"入力PDFが見つかりません: {pdf_path}")
+            result = NG_VAL
+            continue
+
+        try:
+            if process_pdf(pdf_path, ini_path, parsed.name) != OK_VAL:
+                result = NG_VAL
+        except Exception as e:
+            print(f"ERROR: {e}")
+            result = NG_VAL
+
+    return result
+
+
 def get_ini_dict_val():
     return {
         "官報": {
@@ -1449,67 +1521,6 @@ def process_pdf(pdf_path, ini_path, name):
     print(f"出力TXT : {output_path}")
     print(f"該当件数: {len(matches)}")
     return OK_VAL
-
-
-def main(args=None) -> None:
-    parser = argparse.ArgumentParser(
-        prog=SCR_PATH.name,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent(
-            f"""\
-            version={__version__}
-            官報をOCRでテキスト化し、
-            INIで指定した裁判所と、必要に応じて氏名で抽出します。
-
-            官報掲載項目の固定一覧を公告境界のマスターとして使用し、
-            次の段・次のページに続く同一公告は結合します。
-
-            Copyright :{__copyright__}
-            author :{__author__}
-            """
-        ),
-    )
-    parser.add_argument(
-        "-v", "--version", action="version",
-        version=f"{SCR_PATH.name} version={__version__}",
-    )
-    parser.add_argument("input_pdf", help="入力する官報PDF")
-    parser.add_argument(
-        "-n", "--name",
-        help="氏名。指定した場合は裁判所 AND 氏名で絞り込みます。",
-    )
-    parser.add_argument(
-        "-c", "--config",
-        default=str(DEFAULT_INI),
-        help=f"INIファイル。既定値: {DEFAULT_INI.name}",
-    )
-
-    parsed = parser.parse_args(args)
-    pdf_path = Path(parsed.input_pdf).resolve()
-    ini_path = Path(parsed.config).resolve()
-
-    if not pdf_path.is_file():
-        print(f"入力PDFが見つかりません: {pdf_path}")
-        return NG_VAL
-
-    if not ini_path.is_file():
-        # -c未指定の既定INIは自動作成する。
-        if parsed.config == str(DEFAULT_INI):
-            try:
-                create_default_ini(ini_path)
-            except OSError as e:
-                print(f"INIファイルの作成に失敗しました: {ini_path}")
-                print(f"ERROR: {e}")
-                return NG_VAL
-        else:
-            print(f"指定されたINIファイルが見つかりません: {ini_path}")
-            return NG_VAL
-
-    try:
-        return process_pdf(pdf_path, ini_path, parsed.name)
-    except Exception as e:
-        print(f"ERROR: {e}")
-        return NG_VAL
 
 
 if __name__ == "__main__":
