@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import textwrap
 from pathlib import Path
 from typing import List
@@ -952,6 +953,7 @@ ANNOUNCEMENT_HEADINGS = [
 
 
 def main(args=None) -> None:
+    all_start_time = time.perf_counter()
     parser = argparse.ArgumentParser(
         prog=SCR_PATH.name,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1006,6 +1008,7 @@ def main(args=None) -> None:
 
     result = OK_VAL
     for input_pdf in parsed.input_pdf:
+        start_time = time.perf_counter()
         pdf_path = Path(input_pdf).resolve()
 
         if not pdf_path.is_file():
@@ -1019,7 +1022,11 @@ def main(args=None) -> None:
         except Exception as e:
             print(f"ERROR: {e}")
             result = NG_VAL
+        elapsed_time = time.perf_counter() - start_time
+        print(f"処理時間: {elapsed_time:.2f} 秒")
 
+    elapsed_time = time.perf_counter() - all_start_time
+    print(f"total処理時間: {elapsed_time:.2f} 秒")
     return result
 
 
