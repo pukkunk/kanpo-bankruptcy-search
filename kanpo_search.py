@@ -1402,7 +1402,7 @@ def process_pdf(pdf_path, ini_path, name):
                 column_image = full_image.crop((left, 0, right, pixel_height))
 
                 image_path = pdf_path.parent / (
-                    f".{pdf_path.stem}_p{page_no:04d}_c{column_no + 1}.png"
+                    f".{pdf_path.stem}_{dpi}dpi_p{page_no:04d}_c{column_no + 1}.png"
                 )
                 column_image.save(str(image_path))
 
