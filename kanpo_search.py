@@ -989,6 +989,11 @@ def main(args=None) -> None:
         default=str(DEFAULT_INI),
         help=f"INIファイル。既定値: {DEFAULT_INI.name}",
     )
+    parser.add_argument(
+        "-p",
+        "--pages",
+        help="処理するページを指定（例: 7-10,11,13 / 10- / -10）"
+    )
 
     parsed = parser.parse_args(args)
     ini_path = Path(parsed.config).resolve()
@@ -1017,7 +1022,7 @@ def main(args=None) -> None:
             continue
 
         try:
-            if process_pdf(pdf_path, ini_path, parsed.name) != OK_VAL:
+            if process_pdf(pdf_path, ini_path, parsed.name, parsed.pages) != OK_VAL:
                 result = NG_VAL
         except Exception as e:
             print(f"ERROR: {e}")
@@ -1327,7 +1332,7 @@ def detect_body_horizontal_bounds(image, columns):
     return left, right
 
 
-def process_pdf(pdf_path, ini_path, name):
+def process_pdf(pdf_path, ini_path, name, page_spec=None):
     """PDFをOCRし、次の段・次のページに続く公告を結合して抽出する。"""
     ini_parser = read_ini(ini_path)
 
@@ -1366,7 +1371,20 @@ def process_pdf(pdf_path, ini_path, name):
     skipped_portrait_pages = 0
     processed_landscape_pages = 0
     with fitz.open(pdf_path) as document:
+        total_pages = len(document)
+
+        # -pの指定を、実際に処理するページ番号の集合に変換する。
+        selected_pages = parse_page_ranges(page_spec, total_pages)
+        print(
+            f"処理対象ページ: "
+            f"{', '.join(map(str, sorted(selected_pages)))}"
+        )
+
         for page_no, page in enumerate(document, start=1):
+            # 処理対象ページでなければスキップする。
+            if page_no not in selected_pages:
+                continue
+
             # page.rectはページの向きを反映した幅・高さを返す。
             if page.rect.width <= page.rect.height:
                 skipped_portrait_pages += 1
@@ -1529,6 +1547,118 @@ def process_pdf(pdf_path, ini_path, name):
     print(f"該当件数: {len(matches)}")
     return OK_VAL
 
+def parse_page_ranges(page_spec, total_pages):
+    """ページ指定文字列を処理対象ページ番号の集合に変換する。"""
+
+    # -pを指定しなかった場合は、全ページを処理対象にする。
+    if not page_spec:
+        return set(range(1, total_pages + 1))
+
+    pages = set()
+
+    for part in page_spec.split(","):
+        part = part.strip()
+
+        if not part:
+            continue
+
+        # 1個のページ番号
+        if "-" not in part:
+            page = int(part)
+
+            if page < 1 or page > total_pages:
+                raise ValueError(
+                    f"ページ番号が範囲外です: {part}"
+                )
+
+            pages.add(page)
+            continue
+
+        start, end = part.split("-", 1)
+        start = start.strip()
+        end = end.strip()
+
+        # 7-10 → 7～10ページ
+        if start and end:
+            start_page = int(start)
+            end_page = int(end)
+
+            if start_page < 1 or end_page < 1:
+                raise ValueError(
+                    f"ページ番号は1以上を指定してください: {part}"
+                )
+
+            if start_page > end_page:
+                raise ValueError(
+                    f"ページ範囲が不正です: {part}"
+                )
+
+            if end_page > total_pages:
+                raise ValueError(
+                    f"ページ番号がPDFのページ数を超えています: {part}"
+                )
+
+            pages.update(range(start_page, end_page + 1))
+
+        # 7- → 7ページ以降
+        elif start:
+            start_page = int(start)
+
+            if start_page < 1 or start_page > total_pages:
+                raise ValueError(
+                    f"ページ番号が範囲外です: {part}"
+                )
+
+            pages.update(range(start_page, total_pages + 1))
+
+        # -10 → 1～10ページ
+        else:
+            end_page = int(end)
+
+            if end_page < 1 or end_page > total_pages:
+                raise ValueError(
+                    f"ページ番号が範囲外です: {part}"
+                )
+
+            pages.update(range(1, end_page + 1))
+
+    return pages
+
+def is_page_selected(page_no, page_spec, total_pages):
+    """指定されたページが処理対象か判定する。"""
+    if not page_spec:
+        return True
+
+    for part in page_spec.split(","):
+        part = part.strip()
+
+        if not part:
+            continue
+
+        if "-" not in part:
+            if page_no == int(part):
+                return True
+            continue
+
+        start, end = part.split("-", 1)
+        start = start.strip()
+        end = end.strip()
+
+        if start and end:
+            if int(start) <= page_no <= int(end):
+                return True
+
+        elif start:
+            # 10- → 10ページ以降
+            if page_no >= int(start):
+                return True
+
+        else:
+            # -10 → 1～10ページ
+            if page_no <= int(end):
+                return True
+
+    return False
 
 if __name__ == "__main__":
     sys.exit(main())
