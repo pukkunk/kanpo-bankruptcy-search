@@ -42,7 +42,7 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.1, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.2, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -1345,8 +1345,8 @@ def process_pdf(pdf_path, ini_path, name):
         raise ValueError("段組数は1以上を指定してください。")
 
     tesseract = find_tesseract(tesseract_path)
-    output_path = pdf_path.with_suffix(".txt")
-    ocr_output_path = pdf_path.with_name(pdf_path.stem + "_ocr.txt")
+    output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi.txt")
+    ocr_output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi_ocr.txt")
 
     if intermediate_output not in (0, 1):
         raise ValueError("[OCR] 中間データ出力は0または1を指定してください。")
