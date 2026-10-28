@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import argparse
 import fnmatch
-from difflib import SequenceMatcher
 import os
 import platform
 import re
@@ -43,7 +42,7 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.2, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.3, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -952,7 +951,6 @@ ANNOUNCEMENT_HEADINGS = [
     'その他（政府調達）',
 ]
 
-
 def main(args=None) -> None:
     all_start_time = time.perf_counter()
     parser = argparse.ArgumentParser(
@@ -1042,10 +1040,10 @@ def get_ini_dict_val():
             "裁判所": {"type": str, "inf": "*地方裁判所*"},
             "段組数": {"type": int, "inf": 4},
             "公告": {"type": List[str], "inf": ["破産手続開始"]},
-            "あいまい検索": {"type": int, "inf": 1},
-            "あいまい検索一致率": {"type": int, "inf": 90},
         },
         "OCR": {
+            #修正: 辞書内の説明文字列を削除し、構文エラーを解消
+            "ocr": {"type": str, "inf": "ndlocr-lite"},
             "実行ファイル": {"type": str, "inf": ""},
             "言語": {"type": str, "inf": "jpn"},
             "PSM": {"type": int, "inf": 6},
@@ -1072,16 +1070,14 @@ def create_default_ini(ini_path: Path) -> None:
         "",
         "; 今回の官報は4段組",
         "段組数=4",
-        "; あいまい検索: 1=ON、0=OFF",
-        "あいまい検索=1",
-        "; あいまい検索一致率: 0～100（例: 90=90%）",
-        "あいまい検索一致率=90",
         "",
         "; OCRで抽出対象にする公告名",
         "; 複数指定する場合はカンマ区切り",
         "公告=破産手続開始,破産手続開始及び免責許可申立てに関する意見申述期間",
         "",
         "[OCR]",
+        "; OCRエンジン: tesseract または ndlocr-lite",
+        "ocr=ndlocr-lite",  #修正
         "; 空欄ならPATHまたは標準的なWindowsインストール先を検索",
         "実行ファイル=",
         "言語=jpn",
@@ -1158,6 +1154,69 @@ def run_tesseract(tesseract, image_path, language, psm):
     return result.stdout
 
 
+def find_ndlocr_lite(configured_path: str) -> str:
+    if configured_path:
+        path = Path(os.path.expandvars(os.path.expanduser(configured_path)))
+        if path.exists():
+            return str(path)
+
+    found = shutil.which("ndlocr-lite")
+    if found:
+        return found
+
+    candidates = [
+        Path(os.path.expandvars(r"%USERPROFILE%\.local\bin\ndlocr-lite.exe")),
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
+    raise FileNotFoundError(
+        "ndlocr-lite が見つかりません。INIの [OCR] 実行ファイル に "
+        "ndlocr-lite.exe のフルパスを指定してください。"
+    )
+
+
+def run_ndlocr_lite(ndlocr_lite, image_path, output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        ndlocr_lite,
+        "--sourceimg", str(image_path),
+        "--output", str(output_dir),
+    ]
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ndlocr-lite OCRに失敗しました。\n{result.stderr.strip()}"
+        )
+
+    txt_path = output_dir / f"{Path(image_path).stem}.txt"
+
+    if not txt_path.exists():
+        raise RuntimeError(
+            f"ndlocr-liteのOCR結果TXTが見つかりません。\n"
+            f"期待したファイル: {txt_path}"
+        )
+
+    return txt_path.read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+
+
 def normalize_text(text):
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return "\n".join(line.rstrip() for line in text.splitlines()).strip()
@@ -1168,27 +1227,22 @@ def normalize_heading(text):
     return re.sub(r"\s+", "", text).strip()
 
 
-def heading_line_matches(compact, normalized_heading, fuzzy_search=False, threshold_percent=90):
-    """OCRの誤認識や見出し末尾の余分な文字を考慮して判定する。"""
+def heading_line_matches(compact, normalized_heading):
+    """OCRで見出し末尾に混入する段番号・罫線由来文字などを許容して判定する。"""
     if compact == normalized_heading:
         return True
+    if not compact.startswith(normalized_heading):
+        return False
 
-    if compact.startswith(normalized_heading):
-        # 官報OCRで見出しの後ろに段番号などが混入する場合
-        suffix = compact[len(normalized_heading):]
-        if len(suffix) <= 4 and re.fullmatch(
-            r"[0-9０-９|｜:：iIlTt!]+", suffix
-        ):
-            return True
+    # 官報OCRでは「破産手続開始 1 i」のように、見出しの後ろへ
+    # 段番号や罫線由来の短い文字が混入することがある。
+    suffix = compact[len(normalized_heading):]
+    if len(suffix) > 4:
+        return False
+    return bool(re.fullmatch(r"[0-9０-９|｜:：iIlTt!]+", suffix))
 
-    if fuzzy_search:
-        return fuzzy_heading_match(
-            compact, normalized_heading, threshold_percent
-        )
 
-    return False
-
-def find_announcement_starts(stream, fuzzy_search=False, threshold_percent=90):
+def find_announcement_starts(stream):
     """官報掲載項目一覧から、公告見出しの開始位置を検出する。"""
     lines = stream.splitlines(keepends=True)
     starts = []
@@ -1209,7 +1263,7 @@ def find_announcement_starts(stream, fuzzy_search=False, threshold_percent=90):
 
         # 1行で見出しになっている場合。
         for normalized, heading in normalized_headings:
-            if heading_line_matches(compact, normalized, fuzzy_search, threshold_percent):
+            if heading_line_matches(compact, normalized):
                 starts.append((offset, heading))
                 break
         else:
@@ -1222,7 +1276,7 @@ def find_announcement_starts(stream, fuzzy_search=False, threshold_percent=90):
                 joined += normalize_heading(next_line)
                 found = False
                 for normalized, heading in normalized_headings:
-                    if heading_line_matches(joined, normalized, fuzzy_search, threshold_percent):
+                    if heading_line_matches(joined, normalized):
                         starts.append((offset, heading))
                         found = True
                         break
@@ -1244,11 +1298,9 @@ def find_announcement_starts(stream, fuzzy_search=False, threshold_percent=90):
     return unique
 
 
-def split_announcements(stream, fuzzy_search=False, threshold_percent=90):
+def split_announcements(stream):
     """掲載項目見出しを境界として公告単位に分割する。"""
-    starts = find_announcement_starts(
-        stream, fuzzy_search, threshold_percent
-    )
+    starts = find_announcement_starts(stream)
     records = []
     for index, (start, heading) in enumerate(starts):
         end = starts[index + 1][0] if index + 1 < len(starts) else len(stream)
@@ -1257,29 +1309,14 @@ def split_announcements(stream, fuzzy_search=False, threshold_percent=90):
             records.append((heading, body, start, end))
     return records
 
-def announcement_matches_target(heading, target_patterns, fuzzy_search=False, threshold_percent=90):
-    """INIの[官報]公告で指定された掲載項目を抽出対象にする。"""
+def announcement_matches_target(heading, target_patterns):
+    """INIの[官報]公告で指定された掲載項目だけを抽出対象にする。"""
+    # ANNOUNCEMENT_HEADINGSは公告の境界判定専用。抽出対象はINIだけで決める。
     normalized_heading = normalize_heading(heading)
-
-    normalized_targets = [
-        normalize_heading(x)
-        for x in target_patterns
-        if normalize_heading(x)
-    ]
-
-    # 従来の完全一致を優先
-    if normalized_heading in normalized_targets:
-        return True
-
-    if fuzzy_search:
-        return any(
-            fuzzy_heading_match(
-                normalized_heading, target, threshold_percent
-            )
-            for target in normalized_targets
-        )
-
-    return False
+    normalized_targets = {
+        normalize_heading(x) for x in target_patterns if normalize_heading(x)
+    }
+    return normalized_heading in normalized_targets
 
 def extract_court(text):
     for line in text.splitlines():
@@ -1374,20 +1411,23 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     dpi = ini_parser.get("OCR", "解像度")
     intermediate_output = ini_parser.get("OCR", "中間データ出力")
     output_encoding = ini_parser.get("出力", "文字コード")
-    fuzzy_search = ini_parser.get("官報", "あいまい検索")
-    fuzzy_threshold = ini_parser.get("官報", "あいまい検索一致率")
+    ocr = ini_parser.get("OCR", "ocr").strip().lower()
+    ocr_executable = ini_parser.get("OCR", "実行ファイル")
 
-    if fuzzy_search not in (0, 1):
-        raise ValueError("[官報] あいまい検索は0または1を指定してください。")
+    if ocr not in ("tesseract", "ndlocr-lite"):
+        raise ValueError(
+            "[OCR] ocr は tesseract または ndlocr-lite を指定してください。"
+        )
 
-    if not 0 <= fuzzy_threshold <= 100:
-        raise ValueError("[官報] あいまい検索一致率は0～100を指定してください。")
-
+    if ocr == "tesseract":
+        tesseract = find_tesseract(ocr_executable)
+    else:
+        ndlocr_lite = find_ndlocr_lite(ocr_executable)
 
     if columns < 1:
         raise ValueError("段組数は1以上を指定してください。")
 
-    tesseract = find_tesseract(tesseract_path)
+    #★修正必要
     output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi.txt")
     ocr_output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi_ocr.txt")
 
@@ -1399,11 +1439,10 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     print(f"裁判所  : {', '.join(court_patterns)}")
     print(f"公告    : {', '.join(announcement_patterns)}")
     print(f"段組数  : {columns}")
-    print(f"OCR     : {tesseract}")
+    print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")  #修正
+    print(f"OCR方式 : {ocr}")  #修正
     print(f"中間データ出力: {intermediate_output}")
     print(f"氏名    : {name if name else '指定なし'}")
-    print(f"あいまい検索: {'ON' if fuzzy_search == 1 else 'OFF'}")
-    print(f"あいまい検索一致率: {fuzzy_threshold}%")
 
     # 全ページを確認し、横向きページ（縦段組み）のみOCRする。
     # 官報では、横向きページを縦段組み、縦向きページを横段組みとして扱う。
@@ -1452,6 +1491,10 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             if content_width <= 0:
                 raise ValueError(f"ページ {page_no}: 本文領域の幅が不正です。")
 
+            #修正: 解像度ごとに作業フォルダーを分け、異なる解像度の処理が混ざらないようにする。
+            ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
+            ocr_work_dir.mkdir(parents=True, exist_ok=True)
+
             for column_no in range(columns):
                 # 左の欄・右余白を除外した本文領域を段数で分割する。
                 # 端数は各境界を個別に丸め、隙間や重複を避ける。
@@ -1459,16 +1502,21 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 right = content_left + round((column_no + 1) * content_width / columns)
                 column_image = full_image.crop((left, 0, right, pixel_height))
 
-                image_path = pdf_path.parent / (
-                    f".{pdf_path.stem}_{dpi}dpi_p{page_no:04d}_c{column_no + 1}.png"
+                #修正: 画像名にも解像度・ページ・段番号を含め、作業フォルダーに保存する。
+                image_path = ocr_work_dir / (
+                    f"{pdf_path.stem}_{dpi}dpi_p{page_no:04d}_c{column_no + 1}.png"
                 )
                 column_image.save(str(image_path))
 
                 try:
-                    text = normalize_text(
-                        run_tesseract(tesseract, image_path, language, psm)
-                    )
+                    #修正: INIで選択されたOCRエンジンを実際に呼び出す。
+                    if ocr == "tesseract":
+                        ocr_text = run_tesseract(tesseract, image_path, language, psm)
+                    else:
+                        ocr_text = run_ndlocr_lite(ndlocr_lite, image_path, ocr_work_dir)
+                    text = normalize_text(ocr_text)
                 finally:
+                    #画像はOCR後に不要になるため削除。ndlocr-liteのTXTは集約保存後に削除する。
                     try:
                         image_path.unlink()
                     except OSError:
@@ -1517,14 +1565,32 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 fp.write("\n\n")
         print(f"中間OCR TXT: {ocr_output_path}")
 
+    #修正: 中間データの集約保存後に、ndlocr-liteの個別TXTなど作業用ファイルを削除する。
+    #中間データ出力=1の場合は、上でPDFと同じフォルダーへ {PDF名}_{dpi}dpi_ocr.txt として保存済み。
+    ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
+    if ocr_work_dir.exists():
+        for temp_path in ocr_work_dir.iterdir():
+            if temp_path.is_file() and (
+                temp_path.suffix.lower() in (".txt", ".png")
+                and temp_path.name.startswith(f"{pdf_path.stem}_{dpi}dpi_")
+            ):
+                try:
+                    temp_path.unlink()
+                except OSError as e:
+                    print(f"警告: 一時ファイルを削除できません: {temp_path}: {e}")
+        try:
+            ocr_work_dir.rmdir()  #空の場合だけ削除。ほかのファイルがあれば残す。
+        except OSError:
+            pass
+
     # 「次の公告開始」までを現在の公告として保持する。
-    raw_records = split_announcements(stream, fuzzy_search == 1, fuzzy_threshold)
+    raw_records = split_announcements(stream)
 
     matches = []
     for announcement, body, start_pos, end_pos in raw_records:
         # ANNOUNCEMENT_HEADINGSは「公告の境界」だけを判定する。
         # 実際に抽出する公告はINIの[官報]公告との完全一致で決定する。
-        if not announcement_matches_target(announcement, announcement_patterns, fuzzy_search == 1, fuzzy_threshold):
+        if not announcement_matches_target(announcement, announcement_patterns):
             continue
 
         matched, court = court_matches(body, court_patterns)
@@ -1699,23 +1765,6 @@ def is_page_selected(page_no, page_spec, total_pages):
                 return True
 
     return False
-
-def fuzzy_heading_match(text, heading, threshold_percent=90):
-    """OCR誤認識を許容し、見出しの類似度で判定する。"""
-    text = normalize_heading(text)
-    heading = normalize_heading(heading)
-
-    if not text or not heading:
-        return False
-
-    # 文字数の差が大きい場合は誤一致を避ける
-    max_length_diff = max(2, int(len(heading) * 0.05))
-    if abs(len(text) - len(heading)) > max_length_diff:
-        return False
-
-    # INIのパーセント値を使って類似度を判定
-    similarity = SequenceMatcher(None, text, heading).ratio() * 100
-    return similarity >= threshold_percent
 
 if __name__ == "__main__":
     sys.exit(main())
