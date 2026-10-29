@@ -413,6 +413,33 @@ INIファイルの `[OCR]` セクションにある `中間データ出力`
 -   細かい文字や数字で文字化けが発生することがあります。処理時間と文字化けの影響度合いに応じて、INIファイルの
     `[OCR]` セクションで `解像度` の値を調整してください。
 
-## ライセンス
+## ライセンスと使用ソフトウェア
 
-ライセンスは、GitHubリポジトリに設定した内容に従います。
+このリポジトリで公開しているスクリプト自体のライセンスは、リポジトリ内の [`LICENSE`](https://github.com/pukkunk/kanpo-bankruptcy-search/blob/main/LICENSE) に記載した **MIT License** です。
+
+このリポジトリでは、PyMuPDF、Tesseract-OCR、NDLOCR-Liteなどの外部ソフトウェア本体や実行ファイルを同梱・再配布していません。これらは利用者が各公式配布元から別途導入して使用するものです。以下は使用するソフトウェアのライセンス情報を確認するための案内であり、外部ソフトウェアに対するライセンス許諾を行うものではありません。
+
+| ソフトウェア | 用途 | ライセンス・確認事項 |
+|---|---|---|
+| [PyMuPDF](https://pymupdf.readthedocs.io/en/latest/about.html#license-and-copyright) | PDFの読み込み・画像化 | **GNU AGPL v3 または商用ライセンス**。このスクリプトはPyMuPDFを直接利用します。再配布・公開方法によってはAGPLの条件が重要になるため、配布前にライセンス条件を確認してください。AGPLの条件を満たせない場合は、権利者に商用ライセンスを確認してください。 |
+| [ini_cfg_parser](https://pypi.org/project/ini-cfg-parser/) | INI設定ファイルの読み込み | MIT License |
+| [Tesseract-OCR](https://github.com/tesseract-ocr/tesseract) | OCRエンジン（選択時のみ） | Apache License 2.0。Tesseractは別途インストールして使用します。Tesseract自体の配布物には、依存ソフトウェアのライセンス条件も適用される場合があります。 |
+| [NDLOCR-Lite](https://github.com/ndl-lab/ndlocr-lite) | OCRエンジン（選択時のみ） | 国立国会図書館によるCC BY 4.0。別途インストールして使用します。NDLOCR-Lite本体および依存ライブラリのライセンス・表示条件は、[公式リポジトリのライセンス情報](https://github.com/ndl-lab/ndlocr-lite)を確認してください。 |
+
+### NDLOCR-Liteのクレジット
+
+NDLOCR-Liteを使用する場合は、国立国会図書館が公開するソフトウェアであることと、CC BY 4.0ライセンスであることを明記します。
+
+> NDLOCR-Lite: 国立国会図書館（NDLラボ）公開。ライセンス：Creative Commons Attribution 4.0 International（CC BY 4.0）。
+>
+> https://github.com/ndl-lab/ndlocr-lite
+>
+> https://creativecommons.org/licenses/by/4.0/deed.ja
+
+NDLOCR-Liteの配布物・モデルをこのリポジトリに同梱または再配布する場合は、上記のクレジットだけで十分とは限りません。NDLOCR-Liteのライセンス本文、依存ライブラリのライセンス一覧、およびモデルに関する追加条件を確認し、必要な表示やライセンス文書を含めてください。
+
+### このスクリプト自身のライセンス
+
+このスクリプト自身には、リポジトリ内の `LICENSE` ファイルに記載したMIT Licenseが適用されます。ただし、この記載は外部ソフトウェアのライセンスを変更するものではありません。
+
+特にPyMuPDFはAGPL v3または商用ライセンスで提供されているため、スクリプトの利用・配布形態によっては追加の確認が必要です。ソースコードを公開し外部ソフトウェアを同梱していないことだけで、すべての利用形態におけるライセンス適合性が保証されるわけではありません。判断に迷う場合は、PyMuPDFの公式ライセンス情報を確認してください。
