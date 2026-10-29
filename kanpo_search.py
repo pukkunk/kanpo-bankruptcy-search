@@ -1491,7 +1491,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             if content_width <= 0:
                 raise ValueError(f"ページ {page_no}: 本文領域の幅が不正です。")
 
-            #修正: 解像度ごとに作業フォルダーを分け、異なる解像度の処理が混ざらないようにする。
+            #解像度ごとに作業フォルダーを分け、異なる解像度の処理が混ざらないようにする。
             ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
             ocr_work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1502,7 +1502,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 right = content_left + round((column_no + 1) * content_width / columns)
                 column_image = full_image.crop((left, 0, right, pixel_height))
 
-                #修正: 画像名にも解像度・ページ・段番号を含め、作業フォルダーに保存する。
+                #画像名にも解像度・ページ・段番号を含め、作業フォルダーに保存する。
                 image_path = ocr_work_dir / (
                     f"{pdf_path.stem}_{dpi}dpi_p{page_no:04d}_c{column_no + 1}.png"
                 )
@@ -1565,13 +1565,13 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 fp.write("\n\n")
         print(f"中間OCR TXT: {ocr_output_path}")
 
-    #修正: 中間データの集約保存後に、ndlocr-liteの個別TXTなど作業用ファイルを削除する。
+    #中間データの集約保存後に、ndlocr-liteの個別TXTなど作業用ファイルを削除する。
     #中間データ出力=1の場合は、上でPDFと同じフォルダーへ {PDF名}_{dpi}dpi_ocr.txt として保存済み。
     ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
     if ocr_work_dir.exists():
         for temp_path in ocr_work_dir.iterdir():
             if temp_path.is_file() and (
-                temp_path.suffix.lower() in (".txt", ".png")
+                temp_path.suffix.lower() in (".txt", ".png", ".json", ".xml")
                 and temp_path.name.startswith(f"{pdf_path.stem}_{dpi}dpi_")
             ):
                 try:
