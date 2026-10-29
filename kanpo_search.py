@@ -1041,8 +1041,8 @@ def get_ini_dict_val():
             "裁判所": {"type": str, "inf": "*地方裁判所*"},
             "段組数": {"type": int, "inf": 4},
             "公告": {"type": List[str], "inf": ["破産手続開始"]},
-            "あいまい検索": {"type": int, "inf": 1},  #修正
-            "あいまい検索一致率": {"type": int, "inf": 90},  #修正
+            "あいまい検索": {"type": int, "inf": 1},
+            "あいまい検索一致率": {"type": int, "inf": 90},
         },
         "OCR": {
             "ocr": {"type": str, "inf": "ndlocr-lite"},
@@ -1082,7 +1082,7 @@ def create_default_ini(ini_path: Path) -> None:
         "",
         "[OCR]",
         "; OCRエンジン: tesseract または ndlocr-lite",
-        "ocr=ndlocr-lite",  #修正
+        "ocr=ndlocr-lite",
         "; 空欄ならPATHまたは標準的なWindowsインストール先を検索",
         "実行ファイル=",
         "言語=jpn",
@@ -1474,7 +1474,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     print(f"裁判所  : {', '.join(court_patterns)}")
     print(f"公告    : {', '.join(announcement_patterns)}")
     print(f"段組数  : {columns}")
-    print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")  #修正
+    print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")
     print(f"OCR方式 : {ocr}")
     print(f"中間データ出力: {intermediate_output}")
     print(f"氏名    : {name if name else '指定なし'}")
@@ -1546,7 +1546,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 column_image.save(str(image_path))
 
                 try:
-                    #修正: INIで選択されたOCRエンジンを実際に呼び出す。
+                    # INIで選択されたOCRエンジンを実際に呼び出す。
                     if ocr == "tesseract":
                         ocr_text = run_tesseract(tesseract, image_path, language, psm)
                     else:
