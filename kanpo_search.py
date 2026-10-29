@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import List
 
 try:
-    import fitz  # PyMuPDF
+    import pypdfium2 as pdfium
 except ImportError as e:
-    msg = "The 'pymupdf' module is required but not installed.\n"
-    msg += "You can install it with: pip install pymupdf\n"
+    msg = "The 'pypdfium2' module is required but not installed.\n"
+    msg += "You can install it with: python -m pip install pypdfium2\n"
     msg += f"Details: {e}"
     print(msg)
     raise SystemExit(1)
@@ -26,7 +26,7 @@ try:
     import ini_cfg_parser as ini
 except ImportError as e:
     msg = "The 'ini_cfg_parser' module is required but not installed.\n"
-    msg += "You can install it with: pip install ini_cfg_parser\n"
+    msg += "You can install it with: python -m pip install ini_cfg_parser\n"
     msg += f"Details: {e}"
     print(msg)
     raise SystemExit(1)
@@ -43,7 +43,7 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.3, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.4, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -1041,8 +1041,8 @@ def get_ini_dict_val():
             "裁判所": {"type": str, "inf": "*地方裁判所*"},
             "段組数": {"type": int, "inf": 4},
             "公告": {"type": List[str], "inf": ["破産手続開始"]},
-            "あいまい検索": {"type": int, "inf": 1},
-            "あいまい検索一致率": {"type": int, "inf": 90},
+            "あいまい検索": {"type": int, "inf": 1},  #修正
+            "あいまい検索一致率": {"type": int, "inf": 90},  #修正
         },
         "OCR": {
             "ocr": {"type": str, "inf": "ndlocr-lite"},
@@ -1082,7 +1082,7 @@ def create_default_ini(ini_path: Path) -> None:
         "",
         "[OCR]",
         "; OCRエンジン: tesseract または ndlocr-lite",
-        "ocr=ndlocr-lite",
+        "ocr=ndlocr-lite",  #修正
         "; 空欄ならPATHまたは標準的なWindowsインストール先を検索",
         "実行ファイル=",
         "言語=jpn",
@@ -1474,7 +1474,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     print(f"裁判所  : {', '.join(court_patterns)}")
     print(f"公告    : {', '.join(announcement_patterns)}")
     print(f"段組数  : {columns}")
-    print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")
+    print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")  #修正
     print(f"OCR方式 : {ocr}")
     print(f"中間データ出力: {intermediate_output}")
     print(f"氏名    : {name if name else '指定なし'}")
@@ -1486,7 +1486,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     chunks = []
     skipped_portrait_pages = 0
     processed_landscape_pages = 0
-    with fitz.open(pdf_path) as document:
+    with pdfium.PdfDocument(str(pdf_path)) as document:
         total_pages = len(document)
 
         # -pの指定を、実際に処理するページ番号の集合に変換する。
@@ -1496,30 +1496,37 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             f"{', '.join(map(str, sorted(selected_pages)))}"
         )
 
-        for page_no, page in enumerate(document, start=1):
+        for page_no in range(1, total_pages + 1):
             # 処理対象ページでなければスキップする。
             if page_no not in selected_pages:
                 continue
 
-            # page.rectはページの向きを反映した幅・高さを返す。
-            if page.rect.width <= page.rect.height:
-                skipped_portrait_pages += 1
-                print(
-                    f"ページ {page_no}: 縦向き "
-                    f"({page.rect.width:.1f} x {page.rect.height:.1f}) のため除外"
-                )
-                continue
+            page = document[page_no - 1]  # pypdfium2のページ番号は0始まり
+            try:  # ページリソースを確実に解放
+                # pypdfium2のget_rotation()は角度(90/270)ではなく、
+                # 90度単位の値(0/1/2/3)を返すため、1または3で幅・高さを入れ替える。
+                page_width, page_height = page.get_size()
+                rotation = page.get_rotation()
+                if rotation in (1, 3):
+                    page_width, page_height = page_height, page_width
 
-            processed_landscape_pages += 1
-            matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+                if page_width <= page_height:
+                    skipped_portrait_pages += 1
+                    print(
+                        f"ページ {page_no}: 縦向き "
+                        f"({page_width:.1f} x {page_height:.1f}) のため除外 "
+                    )
+                    continue
 
-            # page.rectの座標でclipすると、回転ページでは表示画像との位置がずれる。
-            # まずページ全体を回転反映済みの画像として描画し、その画素幅を分割する。
-            full_pix = page.get_pixmap(matrix=matrix, alpha=False)
-            full_image = Image.frombytes(
-                "RGB", (full_pix.width, full_pix.height), full_pix.samples
-            )
-            pixel_width, pixel_height = full_image.size
+                processed_landscape_pages += 1
+
+                # PDFiumでページ全体を指定DPIで描画する。
+                # PDFに設定されたページ回転はrender()側で反映される。
+                # Pillow画像に変換してRGBに統一する。
+                full_image = page.render(scale=dpi / 72.0).to_pil().convert("RGB")
+                pixel_width, pixel_height = full_image.size
+            finally:
+                page.close()
 
             # 固定割合で余白を除外せず、画像内の長い縦罫線から本文左右端を検出する。
             # 右側の余白境界と、左側の日付・官報名・号数欄との境界を線の位置で判定する。
@@ -1546,7 +1553,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 column_image.save(str(image_path))
 
                 try:
-                    # INIで選択されたOCRエンジンを実際に呼び出す。
+                    #修正: INIで選択されたOCRエンジンを実際に呼び出す。
                     if ocr == "tesseract":
                         ocr_text = run_tesseract(tesseract, image_path, language, psm)
                     else:
