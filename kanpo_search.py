@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tempfile
 import math
 import textwrap
 from pathlib import Path
@@ -45,7 +46,7 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.4, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.5, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -1103,7 +1104,7 @@ def create_default_ini(ini_path: Path) -> None:
         "言語=jpn",
         "PSM=6",
         "; NDLOCR-Lite実行デバイス: cpu または cuda",
-        "device=cpu",  #修正
+        "device=cpu",
         "解像度=300",
         "; エッジ強調: 0=無効、1=弱、2=標準、3=強",
         "エッジ強調=0",
@@ -1144,7 +1145,7 @@ def parse_edge_params(value: str, key: str) -> tuple:
         raise ValueError(f"{key}には有限の数値を指定してください。")
 
     radius = float(params[0])
-    if not 0.1 <= radius <= 10.0:  #修正
+    if not 0.1 <= radius <= 10.0:
         raise ValueError(f"{key}: radiusは0.1～10.0を指定してください。")
 
     # 整数として扱える値か確認
@@ -1152,14 +1153,14 @@ def parse_edge_params(value: str, key: str) -> tuple:
         raise ValueError("percentには整数を指定してください。")
 
     percent = int(params[1])
-    if not 0 <= percent <= 500:  #修正
+    if not 0 <= percent <= 500:
         raise ValueError(f"{key}: percentは0～500を指定してください。")
 
     if not params[2].is_integer():
         raise ValueError(f"{key}: thresholdには整数を指定してください。")
 
     threshold = int(params[2])
-    if not 0 <= threshold <= 255:  #修正
+    if not 0 <= threshold <= 255:
         raise ValueError(f"{key}: thresholdは0～255を指定してください。")
 
     return radius, percent, threshold
@@ -1245,48 +1246,93 @@ def find_ndlocr_lite(configured_path: str) -> str:
     )
 
 
-def run_ndlocr_lite(ndlocr_lite, image_path, output_dir, viz=False, device="cpu"):
+def run_ndlocr_lite_batch(ndlocr_lite, source_dir, output_dir, image_paths, viz=False, device="cpu"):
+    """画像フォルダー内のPNGをNDL OCR-Liteで一括OCRする。"""
+    source_dir = Path(source_dir)
     output_dir = Path(output_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    #同名の古いOCR結果が残っていると誤読するため、対象画像分だけ先に削除する。
+    for image_path in image_paths:
+        for suffix in (".txt", ".json", ".xml"):
+            old_path = output_dir / f"{Path(image_path).stem}{suffix}"
+            if old_path.exists():
+                old_path.unlink()
 
     command = [
         ndlocr_lite,
-        "--sourceimg", str(image_path),
-        "--output", str(output_dir),
+        "--sourcedir", str(source_dir),
+        "--out", str(output_dir),
         "--device", device,
     ]
-
     if viz:
         command.extend(["--viz", "True"])
 
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ndlocr-lite OCRに失敗しました。\n{result.stderr.strip()}"
+    # OCR結果TXTの作成数を定期的に確認し、完了段数を表示する。
+    # NDL OCR-Lite自体に進捗表示がなくても、完了した画像数を確認できる。
+    total_images = len(image_paths)
+    started_at = time.monotonic()
+    last_display = -1
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as log_file:
+        process = subprocess.Popen(
+            command,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
 
-    txt_path = output_dir / f"{Path(image_path).stem}.txt"
+        while process.poll() is None:
+            completed = sum(
+                1 for image_path in image_paths
+                if (output_dir / f"{Path(image_path).stem}.txt").is_file()
+            )
+            if completed != last_display:
+                elapsed = time.monotonic() - started_at
+                percent = completed * 100 / total_images if total_images else 100
+                print(
+                    f"\rNDL OCR-Lite処理中: {completed}/{total_images}段 "
+                    f"({percent:.1f}%) 経過 {elapsed:.1f}秒",
+                    end="", flush=True,
+                )
+                last_display = completed
+            time.sleep(0.5)
 
-    if not txt_path.exists():
+        return_code = process.returncode
+        log_file.seek(0)
+        process_output = log_file.read().strip()
+
+    elapsed = time.monotonic() - started_at
+    completed = sum(
+        1 for image_path in image_paths
+        if (output_dir / f"{Path(image_path).stem}.txt").is_file()
+    )
+    print(
+        f"\rNDL OCR-Lite処理完了: {completed}/{total_images}段 "
+        f"({elapsed:.1f}秒)" + " " * 10
+    )
+
+    if return_code != 0:
         raise RuntimeError(
-            f"ndlocr-liteのOCR結果TXTが見つかりません。\n"
-            f"期待したファイル: {txt_path}"
+            f"ndlocr-lite一括OCRに失敗しました。\n{process_output}"
         )
 
-    return txt_path.read_text(
-        encoding="utf-8",
-        errors="replace",
-    )
+    #一括処理後、画像と同じベース名のTXTを順番どおり読み込む。
+    ocr_results = []
+    for image_path in image_paths:
+        txt_path = output_dir / f"{Path(image_path).stem}.txt"
+        if not txt_path.is_file():
+            raise RuntimeError(
+                f"ndlocr-liteのOCR結果TXTが見つかりません。\n"
+                f"期待したファイル: {txt_path}"
+            )
+        ocr_results.append(
+            txt_path.read_text(encoding="utf-8", errors="replace")
+        )
+    return ocr_results
 
 
 def normalize_text(text):
@@ -1526,7 +1572,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     if not 0 <= fuzzy_threshold <= 100:
         raise ValueError("[官報] あいまい検索一致率は0～100を指定してください。")
 
-    if edge_level not in (0, 1, 2, 3):  #修正
+    if edge_level not in (0, 1, 2, 3):
         raise ValueError("[OCR] エッジ強調は0～3を指定してください。")
 
     ocr = ini_parser.get("OCR", "ocr").strip().lower()
@@ -1567,6 +1613,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     # 全ページを確認し、横向きページ（縦段組み）のみOCRする。
     # 官報では、横向きページを縦段組み、縦向きページを横段組みとして扱う。
     chunks = []
+    pending_ocr = []  # NDL OCR-Liteの一括処理用に画像とページ・段情報を保持する。
     skipped_portrait_pages = 0
     processed_landscape_pages = 0
     with pdfium.PdfDocument(str(pdf_path)) as document:
@@ -1621,6 +1668,8 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             #解像度ごとに作業フォルダーを分け、異なる解像度の処理が混ざらないようにする。
             ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
             ocr_work_dir.mkdir(parents=True, exist_ok=True)
+            image_work_dir = ocr_work_dir / "img" / pdf_path.stem  # PDFごとに入力画像フォルダーを分離する。
+            image_work_dir.mkdir(parents=True, exist_ok=True)
 
             for column_no in range(columns):
                 # 左の欄・右余白を除外した本文領域を段数で分割する。
@@ -1632,34 +1681,55 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 column_image = preprocess_image(column_image, edge_level, edge_settings)
 
                 #画像名にも解像度・ページ・段番号を含め、作業フォルダーに保存する。
-                image_path = ocr_work_dir / (
+                image_path = image_work_dir / (
                     f"{pdf_path.stem}_{dpi}dpi_p{page_no:04d}_c{column_no + 1}.png"
                 )
                 column_image.save(str(image_path))
 
-                try:
-                    #修正: INIで選択されたOCRエンジンを実際に呼び出す。
-                    if ocr == "tesseract":
+                if ocr == "tesseract":  # Tesseractは従来どおり画像ごとにOCRする。
+                    try:
                         ocr_text = run_tesseract(tesseract, image_path, language, psm)
-                    else:
-                        ocr_text = run_ndlocr_lite(ndlocr_lite, image_path, ocr_work_dir, viz=(intermediate_output == 1), device=device,)
-                    text = normalize_text(ocr_text)
-                finally:
-                    #画像はOCR後に不要になるため削除。ndlocr-liteのTXTは集約保存後に削除する。
-                    if intermediate_output == 0:
-                        try:
-                            image_path.unlink()
-                        except OSError:
-                            pass
-
-                if text:
-                    chunks.append(
+                        text = normalize_text(ocr_text)
+                    finally:
+                        if intermediate_output == 0:
+                            try:
+                                image_path.unlink()
+                            except OSError:
+                                pass
+                    if text:
+                        chunks.append(
+                            {"page": page_no, "column": column_no + 1, "text": text}
+                        )
+                else:  # NDL OCR-Liteは全画像作成後にフォルダー単位で一括実行する。
+                    pending_ocr.append(
                         {
+                            "image_path": image_path,
                             "page": page_no,
                             "column": column_no + 1,
-                            "text": text,
                         }
                     )
+
+    # NDL OCR-Liteは全ページ・全段の画像作成が終わってから一度だけ起動する。
+    if ocr == "ndlocr-lite" and pending_ocr:
+        image_paths = [item["image_path"] for item in pending_ocr]
+        ocr_results = run_ndlocr_lite_batch(
+            ndlocr_lite,
+            image_work_dir,
+            ocr_work_dir,
+            image_paths,
+            viz=(intermediate_output == 1),
+            device=device,
+        )
+        for item, ocr_text in zip(pending_ocr, ocr_results):
+            text = normalize_text(ocr_text)
+            if text:
+                chunks.append(
+                    {
+                        "page": item["page"],
+                        "column": item["column"],
+                        "text": text,
+                    }
+                )
 
     print(
         f"ページ向き判定: 横向き {processed_landscape_pages} ページを処理、"
@@ -1710,6 +1780,21 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                         temp_path.unlink()
                     except OSError as e:
                         print(f"警告: 一時ファイルを削除できません: {temp_path}: {e}")
+            image_work_dir = ocr_work_dir / "img" / pdf_path.stem
+            if image_work_dir.exists():
+                for image_path in image_work_dir.glob(f"{pdf_path.stem}_{dpi}dpi_*.png"):
+                    try:
+                        image_path.unlink()
+                    except OSError as e:
+                        print(f"警告: OCR画像を削除できません: {image_path}: {e}")
+                try:
+                    image_work_dir.rmdir()
+                except OSError:
+                    pass
+                try:
+                    image_work_dir.parent.rmdir()
+                except OSError:
+                    pass
             try:
                 ocr_work_dir.rmdir()  #空の場合だけ削除。ほかのファイルがあれば残す。
             except OSError:
@@ -1954,22 +2039,22 @@ def preprocess_image(image: Image.Image, level: int = 1, settings: dict = None,)
         raise ValueError(f"エッジ強調レベル{level}の設定には有限の数値を指定してください。")
 
     radius = float(params[0])
-    if not 0.1 <= radius <= 10.0:  #修正
+    if not 0.1 <= radius <= 10.0:
         raise ValueError("radiusは0.1～10.0を指定してください。")
 
-    #修正: 整数として扱える値か確認
+    # 整数として扱える値か確認
     if not params[1].is_integer() if isinstance(params[1], float) else False:
         raise ValueError("percentには整数を指定してください。")
 
     percent = int(params[1])
-    if not 0 <= percent <= 500:  #修正
+    if not 0 <= percent <= 500:
         raise ValueError("percentは0～500を指定してください。")
 
     if not params[2].is_integer() if isinstance(params[2], float) else False:
         raise ValueError("thresholdには整数を指定してください。")
 
     threshold = int(params[2])
-    if not 0 <= threshold <= 255:  #修正
+    if not 0 <= threshold <= 255:
         raise ValueError("thresholdは0～255を指定してください。")
 
     # グレースケール化
