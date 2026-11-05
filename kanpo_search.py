@@ -1616,6 +1616,10 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     pending_ocr = []  # NDL OCR-Liteの一括処理用に画像とページ・段情報を保持する。
     skipped_portrait_pages = 0
     processed_landscape_pages = 0
+    # 解像度ごとの共通作業フォルダー
+    ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
+    image_base_dir = ocr_work_dir / "img"
+    image_work_dir = None  #PDF専用フォルダーは最初の対象ページで作成する。
     with pdfium.PdfDocument(str(pdf_path)) as document:
         total_pages = len(document)
 
@@ -1658,24 +1662,21 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             finally:
                 page.close()
 
+            # PDF専用の画像フォルダーを1回だけ作成する。
+            if image_work_dir is None:
+                ocr_work_dir.mkdir(parents=True, exist_ok=True)
+                image_base_dir.mkdir(parents=True, exist_ok=True)
+                image_work_dir = Path(tempfile.mkdtemp(
+                    prefix=f"{pdf_path.stem}_",
+                    dir=image_base_dir,
+                ))
+
             # 固定割合で余白を除外せず、画像内の長い縦罫線から本文左右端を検出する。
             # 右側の余白境界と、左側の日付・官報名・号数欄との境界を線の位置で判定する。
             content_left, content_right = detect_body_horizontal_bounds(full_image, columns)
             content_width = content_right - content_left
             if content_width <= 0:
                 raise ValueError(f"ページ {page_no}: 本文領域の幅が不正です。")
-
-            # 解像度ごとの共通作業フォルダー
-            ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
-            ocr_work_dir.mkdir(parents=True, exist_ok=True)
-            # imgフォルダー
-            image_base_dir = ocr_work_dir / "img"
-            image_base_dir.mkdir(parents=True, exist_ok=True)
-            # PDF名＋重複しない文字列で作業フォルダーを作成
-            image_work_dir = Path(tempfile.mkdtemp(
-                prefix=f"{pdf_path.stem}_",
-                dir=image_base_dir,
-            ))
 
             for column_no in range(columns):
                 # 左の欄・右余白を除外した本文領域を段数で分割する。
@@ -1777,6 +1778,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     if intermediate_output == 0:
         ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
         if ocr_work_dir.exists():
+            print(f"削除対象: {temp_path}")
             for temp_path in ocr_work_dir.iterdir():
                 if temp_path.is_file() and (
                     temp_path.suffix.lower() in (".txt", ".png", ".json", ".xml")
