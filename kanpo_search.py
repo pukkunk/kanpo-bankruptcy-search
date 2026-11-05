@@ -1743,6 +1743,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
         f"縦向き {skipped_portrait_pages} ページを除外"
     )
 
+    start_time = time.perf_counter()
     # 各段の境界を保持しつつ、OCR文字列を1本の連続ストリームにする。
     # 公告が段やページをまたいでも途中で切らず、次の公告まで保持する。
     stream_parts = []
@@ -1759,6 +1760,8 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
         cursor = end
 
     stream = "".join(stream_parts)
+    print(f"stream作成: {time.perf_counter() - start_time:.2f}秒", flush=True)
+    start_time = time.perf_counter()
 
     # 中間OCRデータを、入力PDFと同じフォルダーに保存する。
     # ページ・段番号を残すため、検索処理とは独立した確認用データとする。
@@ -1814,8 +1817,17 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             except OSError:
                 pass
 
+    print(f"中間データ処理: {time.perf_counter() - start_time:.2f}秒", flush=True)
+    start_time = time.perf_counter()
+
     # 「次の公告開始」までを現在の公告として保持する。
     raw_records = split_announcements(stream, fuzzy_enabled == 1, fuzzy_threshold)
+    print(
+        f"公告分割: {time.perf_counter() - start_time:.2f}秒"
+        f"（{len(raw_records)}件）",
+        flush=True,
+    )
+    start_time = time.perf_counter()
 
     matches = []
     for announcement, body, start_pos, end_pos in raw_records:
@@ -1859,6 +1871,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 "text": body,
             }
         )
+    print(f"公告検索: {time.perf_counter() - start_time:.2f}秒", flush=True)
 
     with open(output_path, "w", encoding=output_encoding) as fp:
         fp.write("検索結果\n")
