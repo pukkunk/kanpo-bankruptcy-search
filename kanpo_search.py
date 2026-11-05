@@ -1665,11 +1665,17 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             if content_width <= 0:
                 raise ValueError(f"ページ {page_no}: 本文領域の幅が不正です。")
 
-            #解像度ごとに作業フォルダーを分け、異なる解像度の処理が混ざらないようにする。
+            # 解像度ごとの共通作業フォルダー
             ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
             ocr_work_dir.mkdir(parents=True, exist_ok=True)
-            image_work_dir = ocr_work_dir / "img" / pdf_path.stem  # PDFごとに入力画像フォルダーを分離する。
-            image_work_dir.mkdir(parents=True, exist_ok=True)
+            # imgフォルダー
+            image_base_dir = ocr_work_dir / "img"
+            image_base_dir.mkdir(parents=True, exist_ok=True)
+            # PDF名＋重複しない文字列で作業フォルダーを作成
+            image_work_dir = Path(tempfile.mkdtemp(
+                prefix=f"{pdf_path.stem}_",
+                dir=image_base_dir,
+            ))
 
             for column_no in range(columns):
                 # 左の欄・右余白を除外した本文領域を段数で分割する。
