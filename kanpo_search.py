@@ -1772,13 +1772,11 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                 fp.write("\n\n")
         print(f"中間OCR TXT: {ocr_output_path}")
 
-    #中間データの集約保存後に、ndlocr-liteの個別TXTなど作業用ファイルを削除する。
-    #中間データ出力=1の場合は、上でPDFと同じフォルダーへ {PDF名}_{dpi}dpi_ocr.txt として保存済み。
-    # 中間データ出力=0の場合だけ一時ファイルを削除する。
+    # 中間OCRデータの集約保存後に、作業用ファイルを削除する。
+    # 中間データ出力=1の場合は、個別の中間ファイルも残す。
     if intermediate_output == 0:
-        ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
         if ocr_work_dir.exists():
-            print(f"削除対象: {temp_path}")
+            # NDL OCR-Liteの個別TXT・JSON・XMLなどを削除する。
             for temp_path in ocr_work_dir.iterdir():
                 if temp_path.is_file() and (
                     temp_path.suffix.lower() in (".txt", ".png", ".json", ".xml")
@@ -1788,23 +1786,31 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
                         temp_path.unlink()
                     except OSError as e:
                         print(f"警告: 一時ファイルを削除できません: {temp_path}: {e}")
-            image_work_dir = ocr_work_dir / "img" / pdf_path.stem
-            if image_work_dir.exists():
-                for image_path in image_work_dir.glob(f"{pdf_path.stem}_{dpi}dpi_*.png"):
+
+            # 実際に作成したPDF専用画像フォルダーを削除する。
+            # mkdtemp()で作成したランダムなフォルダー名をそのまま使用する。
+            if image_work_dir is not None and image_work_dir.exists():
+                for image_path in image_work_dir.glob("*.png"):
                     try:
                         image_path.unlink()
                     except OSError as e:
                         print(f"警告: OCR画像を削除できません: {image_path}: {e}")
+
                 try:
                     image_work_dir.rmdir()
                 except OSError:
                     pass
+
+            # imgフォルダーは空の場合だけ削除する。
+            if image_base_dir.exists():
                 try:
-                    image_work_dir.parent.rmdir()
+                    image_base_dir.rmdir()
                 except OSError:
                     pass
+
+            # 作業フォルダーは空の場合だけ削除する。
             try:
-                ocr_work_dir.rmdir()  #空の場合だけ削除。ほかのファイルがあれば残す。
+                ocr_work_dir.rmdir()
             except OSError:
                 pass
 
