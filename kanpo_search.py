@@ -1881,7 +1881,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
         fp.write(f"  pypdfium2: {get_package_version('pypdfium2')}\n")
         fp.write(f"  Pillow: {get_package_version('Pillow')}\n")
         fp.write(f"  ini_cfg_parser: {get_package_version('ini_cfg_parser')}\n")
-        fp.write(f"OCRエンジン: {ocr}\n")
+        fp.write(f"OCRエンジン: {ocr} {get_ocr_version(ocr, ocr_executable)}\n")
         fp.write(f"解像度: {dpi} DPI\n")
         fp.write(f"エッジ強調: {edge_level}\n")
         fp.write("=" * 80 + "\n")
@@ -2107,6 +2107,54 @@ def preprocess_image(image: Image.Image, level: int = 1, settings: dict = None,)
     )
 
     return image
+
+
+def get_ocr_version(ocr, ocr_executable):
+    """使用するOCRエンジンのバージョンを取得する。"""
+    try:
+        if ocr == "tesseract":
+            # Tesseractは実行ファイルの--versionから取得
+            exe_path = find_tesseract(ocr_executable)
+            result = subprocess.run(
+                [str(exe_path), "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
+
+            output = result.stdout.strip() or result.stderr.strip()
+
+            if result.returncode == 0 and output:
+                version = output.splitlines()[0].strip()
+                prefix = "tesseract "
+                if version.lower().startswith(prefix):
+                    version = version[len(prefix):]
+                return version
+
+        elif ocr == "ndlocr-lite":
+            # NDL OCR-Liteはuv tool listから取得
+            result = subprocess.run(
+                ["uv", "tool", "list"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("ndlocr-lite v"):
+                        return line.split(" v", 1)[1].strip()
+
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    return "取得失敗"
+
 
 if __name__ == "__main__":
     sys.exit(main())
