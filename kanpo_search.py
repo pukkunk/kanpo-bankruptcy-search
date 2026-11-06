@@ -46,7 +46,7 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.5, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.6, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -58,6 +58,1295 @@ else:
     # Pythonスクリプトとして実行した場合
     SCR_PATH = Path(__file__).resolve()
 DEFAULT_INI = SCR_PATH.with_suffix(".ini")
+
+def main(args=None) -> None:
+    all_start_time = time.perf_counter()
+    parser = argparse.ArgumentParser(
+        prog=SCR_PATH.name,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            f"""\
+            version={__version__}
+            官報をOCRでテキスト化し、
+            INIで指定した裁判所と、必要に応じて氏名で抽出します。
+
+            官報掲載項目の固定一覧を公告境界のマスターとして使用し、
+            次の段・次のページに続く同一公告は結合します。
+
+            Copyright :{__copyright__}
+            author :{__author__}
+            """
+        ),
+    )
+    parser.add_argument(
+        "-v", "--version", action="version",
+        version=f"{SCR_PATH.name} version={__version__}",
+    )
+    parser.add_argument(
+        "input_pdf",
+        nargs="+",
+        help="入力する官報PDF（複数指定可）",
+    )
+    parser.add_argument(
+        "-n", "--name",
+        help="氏名。指定した場合は裁判所 AND 氏名で絞り込みます。",
+    )
+    parser.add_argument(
+        "-c", "--config",
+        default=str(DEFAULT_INI),
+        help=f"INIファイル。既定値: {DEFAULT_INI.name}",
+    )
+    parser.add_argument(
+        "-p",
+        "--pages",
+        help="処理するページを指定（例: 7-10,11,13 / 10- / -10）"
+    )
+
+    parsed = parser.parse_args(args)
+    ini_path = Path(parsed.config).resolve()
+
+    if not ini_path.is_file():
+        # -c未指定の既定INIは自動作成する。
+        if parsed.config == str(DEFAULT_INI):
+            try:
+                create_default_ini(ini_path)
+            except OSError as e:
+                print(f"INIファイルの作成に失敗しました: {ini_path}")
+                print(f"ERROR: {e}")
+                return NG_VAL
+        else:
+            print(f"指定されたINIファイルが見つかりません: {ini_path}")
+            return NG_VAL
+
+    result = OK_VAL
+    for input_pdf in parsed.input_pdf:
+        start_time = time.perf_counter()
+        pdf_path = Path(input_pdf).resolve()
+
+        if not pdf_path.is_file():
+            print(f"入力PDFが見つかりません: {pdf_path}")
+            result = NG_VAL
+            continue
+
+        try:
+            if process_pdf(pdf_path, ini_path, parsed.name, parsed.pages) != OK_VAL:
+                result = NG_VAL
+        except Exception as e:
+            print(f"ERROR: {e}")
+            result = NG_VAL
+        elapsed_time = time.perf_counter() - start_time
+        print(f"処理時間: {elapsed_time:.2f} 秒")
+
+    elapsed_time = time.perf_counter() - all_start_time
+    print(f"total処理時間: {elapsed_time:.2f} 秒")
+    return result
+
+
+def get_package_version(package_name: str) -> str:  # ライブラリ版数取得用関数
+    """インストール済みPythonパッケージの版数を返す。"""
+    try:
+        return package_version(package_name)
+    except PackageNotFoundError:
+        return "不明"
+
+
+def get_ini_dict_val() -> ini.IniDict:
+    return {
+        "官報": {
+            "裁判所": {"type": str, "inf": "*地方裁判所*"},
+            "段組数": {"type": int, "inf": 4},
+            "公告": {"type": List[str], "inf": ["破産手続開始"]},
+            "あいまい検索": {"type": int, "inf": 1},
+            "あいまい検索一致率": {"type": int, "inf": 90},
+        },
+        "OCR": {
+            "ocr": {"type": str, "inf": "ndlocr-lite"},
+            "実行ファイル": {"type": str, "inf": ""},
+            "言語": {"type": str, "inf": "jpn"},
+            "PSM": {"type": int, "inf": 6},
+            "解像度": {"type": int, "inf": 300},
+            "エッジ強調": {"type": int, "inf": 0},
+            "edge1": {"type": str, "inf": "1.0,100,0"},
+            "edge2": {"type": str, "inf": "2.0,150,0"},
+            "edge3": {"type": str, "inf": "3.0,200,0"},
+            "中間データ出力": {"type": int, "inf": 0},
+        },
+        "出力": {
+            "文字コード": {"type": str, "inf": "utf-8"},
+        },
+    }
+
+
+def create_default_ini(ini_path: Path) -> None:
+    """INIファイルが存在しない場合、デフォルト設定で作成する。"""
+    ini_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "; 官報検索設定",
+        "; 日本語UTF-8で保存してください。",
+        "",
+        "[官報]",
+        "; 裁判所はワイルドカード * と ? に対応",
+        "; 複数指定する場合はカンマ区切り",
+        "裁判所=*地方裁判所*",
+        "",
+        "; 今回の官報は4段組",
+        "段組数=4",
+        "; あいまい検索: 0=無効、1=有効",
+        "あいまい検索=1",
+        "; あいまい検索の一致率（0～100）",
+        "あいまい検索一致率=90",
+        "",
+        "; OCRで抽出対象にする公告名",
+        "; 複数指定する場合はカンマ区切り",
+        "公告=破産手続開始,破産手続開始及び免責許可申立てに関する意見申述期間",
+        "",
+        "[OCR]",
+        "; OCRエンジン: tesseract または ndlocr-lite",
+        "ocr=ndlocr-lite",
+        "; 空欄ならPATHまたは標準的なWindowsインストール先を検索",
+        "実行ファイル=",
+        "言語=jpn",
+        "PSM=6",
+        "; NDLOCR-Lite実行デバイス: cpu または cuda",
+        "device=cpu",
+        "解像度=300",
+        "; エッジ強調: 0=無効、1=弱、2=標準、3=強",
+        "エッジ強調=0",
+        "; エッジ強調パラメータ: Radius, Percent, Threshold",
+        "edge1=1.0,100,0",
+        "edge2=2.0,150,0",
+        "edge3=3.0,200,0",
+        "中間データ出力=0",
+        "",
+        "[出力]",
+        "文字コード=utf-8",
+        "",
+    ]
+    ini_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"INIファイルを作成しました: {ini_path}")
+
+
+def read_ini(ini_path: Path):
+    return ini.IniParser(str(ini_path), get_ini_dict_val(), "utf8")
+
+
+def parse_edge_params(value: str, key: str) -> tuple:
+    """INIのエッジ強調設定を検証し、適切な型に変換する。"""
+
+    try:
+        values = [v.strip() for v in value.split(",")]
+
+        if len(values) != 3 or any(not v for v in values):
+            raise ValueError("設定値は3個必要です。")
+
+        params = [float(values[0]), float(values[1]), float(values[2])]
+
+    except (ValueError, AttributeError) as e:
+        raise ValueError(f"{key}の設定値が不正です: {value}") from e
+
+    # 数値型と有限値を確認
+    if not all(type(v) in (int, float) and math.isfinite(v) for v in params):
+        raise ValueError(f"{key}には有限の数値を指定してください。")
+
+    radius = float(params[0])
+    if not 0.1 <= radius <= 10.0:
+        raise ValueError(f"{key}: radiusは0.1～10.0を指定してください。")
+
+    # 整数として扱える値か確認
+    if isinstance(params[1], float) and not params[1].is_integer():
+        raise ValueError("percentには整数を指定してください。")
+
+    percent = int(params[1])
+    if not 0 <= percent <= 500:
+        raise ValueError(f"{key}: percentは0～500を指定してください。")
+
+    if not params[2].is_integer():
+        raise ValueError(f"{key}: thresholdには整数を指定してください。")
+
+    threshold = int(params[2])
+    if not 0 <= threshold <= 255:
+        raise ValueError(f"{key}: thresholdは0～255を指定してください。")
+
+    return radius, percent, threshold
+
+
+def split_patterns(value):
+    if isinstance(value, str):
+        return [x.strip() for x in value.split(",") if x.strip()]
+    return [str(x).strip() for x in value if str(x).strip()]
+
+
+def wildcard_match(text, patterns):
+    text = text.strip()
+    return any(fnmatch.fnmatchcase(text, pattern) for pattern in patterns)
+
+
+def find_tesseract(configured_path: str) -> str:
+    if configured_path:
+        path = Path(os.path.expandvars(os.path.expanduser(configured_path)))
+        if path.exists():
+            return str(path)
+
+    found = shutil.which("tesseract")
+    if found:
+        return found
+
+    candidates = [
+        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
+    raise FileNotFoundError(
+        "Tesseract OCR が見つかりません。INIの [OCR] 実行ファイル に "
+        "tesseract.exe のフルパスを指定してください。"
+    )
+
+
+def run_tesseract(tesseract, image_path, language, psm):
+    command = [
+        tesseract, str(image_path), "stdout",
+        "-l", language, "--psm", str(psm),
+    ]
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Tesseract OCRに失敗しました。\n{result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def find_ndlocr_lite(configured_path: str) -> str:
+    if configured_path:
+        path = Path(os.path.expandvars(os.path.expanduser(configured_path)))
+        if path.exists():
+            return str(path)
+
+    found = shutil.which("ndlocr-lite")
+    if found:
+        return found
+
+    candidates = [
+        Path(os.path.expandvars(r"%USERPROFILE%\.local\bin\ndlocr-lite.exe")),
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
+    raise FileNotFoundError(
+        "ndlocr-lite が見つかりません。INIの [OCR] 実行ファイル に "
+        "ndlocr-lite.exe のフルパスを指定してください。"
+    )
+
+
+def run_ndlocr_lite_batch(ndlocr_lite, source_dir, output_dir, image_paths, viz=False, device="cpu"):
+    """画像フォルダー内のPNGをNDL OCR-Liteで一括OCRする。"""
+    source_dir = Path(source_dir)
+    output_dir = Path(output_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    #同名の古いOCR結果が残っていると誤読するため、対象画像分だけ先に削除する。
+    for image_path in image_paths:
+        for suffix in (".txt", ".json", ".xml"):
+            old_path = output_dir / f"{Path(image_path).stem}{suffix}"
+            if old_path.exists():
+                old_path.unlink()
+
+    command = [
+        ndlocr_lite,
+        "--sourcedir", str(source_dir),
+        "--out", str(output_dir),
+        "--device", device,
+    ]
+    if viz:
+        command.extend(["--viz", "True"])
+
+    # OCR結果TXTの作成数を定期的に確認し、完了段数を表示する。
+    # NDL OCR-Lite自体に進捗表示がなくても、完了した画像数を確認できる。
+    total_images = len(image_paths)
+    started_at = time.monotonic()
+    last_display = -1
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as log_file:
+        process = subprocess.Popen(
+            command,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+        while process.poll() is None:
+            completed = sum(
+                1 for image_path in image_paths
+                if (output_dir / f"{Path(image_path).stem}.txt").is_file()
+            )
+            if completed != last_display:
+                elapsed = time.monotonic() - started_at
+                percent = completed * 100 / total_images if total_images else 100
+                print(
+                    f"\rNDL OCR-Lite処理中: {completed}/{total_images}段 "
+                    f"({percent:.1f}%) 経過 {elapsed:.1f}秒",
+                    end="", flush=True,
+                )
+                last_display = completed
+            time.sleep(0.5)
+
+        return_code = process.returncode
+        log_file.seek(0)
+        process_output = log_file.read().strip()
+
+    elapsed = time.monotonic() - started_at
+    completed = sum(
+        1 for image_path in image_paths
+        if (output_dir / f"{Path(image_path).stem}.txt").is_file()
+    )
+    print(
+        f"\rNDL OCR-Lite処理完了: {completed}/{total_images}段 "
+        f"({elapsed:.1f}秒)" + " " * 10
+    )
+
+    if return_code != 0:
+        raise RuntimeError(
+            f"ndlocr-lite一括OCRに失敗しました。\n{process_output}"
+        )
+
+    #一括処理後、画像と同じベース名のTXTを順番どおり読み込む。
+    ocr_results = []
+    for image_path in image_paths:
+        txt_path = output_dir / f"{Path(image_path).stem}.txt"
+        if not txt_path.is_file():
+            raise RuntimeError(
+                f"ndlocr-liteのOCR結果TXTが見つかりません。\n"
+                f"期待したファイル: {txt_path}"
+            )
+        ocr_results.append(
+            txt_path.read_text(encoding="utf-8", errors="replace")
+        )
+    return ocr_results
+
+
+def normalize_text(text):
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
+
+
+def normalize_heading(text):
+    """見出し比較用。OCRによる改行・空白の差を吸収する。"""
+    return re.sub(r"\s+", "", text).strip()
+
+
+def _fuzzy_normalized_heading_match(text, heading, threshold_percent=90):
+    """正規化済み文字列の類似度を判定する。"""
+    if not text or not heading:
+        return False
+
+    # 文字数の差が大きい場合は誤一致を避ける
+    max_length_diff = max(2, int(len(heading) * 0.05))
+    if abs(len(text) - len(heading)) > max_length_diff:
+        return False
+
+    # INIのパーセント値を使って類似度を判定
+    similarity = SequenceMatcher(None, text, heading).ratio() * 100
+    return similarity >= threshold_percent
+
+
+def fuzzy_heading_match(text, heading, threshold_percent=90):
+    """OCR誤認識を許容し、見出しの類似度で判定する。"""
+    text = normalize_heading(text)
+    heading = normalize_heading(heading)
+
+    return _fuzzy_normalized_heading_match(
+        text, heading, threshold_percent
+    )
+
+
+def heading_line_matches(compact, normalized_heading, fuzzy_search=False, threshold_percent=90):
+    """OCRの誤認識や見出し末尾の余分な文字を考慮して判定する。"""
+    if compact == normalized_heading:
+        return True
+
+    if compact.startswith(normalized_heading):
+        # 官報OCRで見出しの後ろに段番号などが混入する場合
+        suffix = compact[len(normalized_heading):]
+        if len(suffix) <= 4 and re.fullmatch(
+            r"[0-9０-９|｜:：iIlTt!]+", suffix
+        ):
+            return True
+
+    if fuzzy_search:
+        return _fuzzy_normalized_heading_match(
+            compact, normalized_heading, threshold_percent
+        )
+
+    return False
+
+
+# 正規化済み見出しをキャッシュする。
+_NORMALIZED_ANNOUNCEMENT_HEADINGS = None
+
+
+def find_announcement_starts(stream, fuzzy_enabled=False, threshold_percent=90):
+    """官報掲載項目一覧から、公告見出しの開始位置を検出する。"""
+
+    global _NORMALIZED_ANNOUNCEMENT_HEADINGS
+
+    # 見出し一覧を初回だけ正規化・分類する。
+    if _NORMALIZED_ANNOUNCEMENT_HEADINGS is None:
+        heading_buckets = {}
+        normalized_headings = sorted(
+            ((normalize_heading(h), h) for h in ANNOUNCEMENT_HEADINGS),
+            key=lambda x: len(x[0]),
+            reverse=True,
+        )
+
+        for normalized, heading in normalized_headings:
+            heading_buckets.setdefault(len(normalized), []).append(
+                (normalized, heading)
+            )
+
+        _NORMALIZED_ANNOUNCEMENT_HEADINGS = {
+            "buckets": heading_buckets,
+            "max_length": len(normalized_headings[0][0]),
+        }
+
+    heading_buckets = _NORMALIZED_ANNOUNCEMENT_HEADINGS["buckets"]
+    max_heading_length = _NORMALIZED_ANNOUNCEMENT_HEADINGS["max_length"]
+
+    # 同じ文字数の行では候補一覧を再利用する。
+    candidate_cache = {}
+
+    def get_candidates(text_length):
+        if text_length not in candidate_cache:
+            # fuzzy_heading_match() の文字数条件を満たす候補を残す。
+            max_diff = max(2, int(max_heading_length * 0.05))
+
+            # 見出し末尾に最大4文字が付く完全一致系の条件も考慮。
+            min_length = max(
+                0,
+                min(text_length - 4, text_length - max_diff),
+            )
+            max_length = text_length + max_diff
+
+            candidates = []
+            for length in range(min_length, max_length + 1):
+                candidates.extend(heading_buckets.get(length, []))
+
+            candidate_cache[text_length] = candidates
+
+        return candidate_cache[text_length]
+
+    lines = stream.splitlines(keepends=True)
+    starts = []
+    offset = 0
+
+    for line_index, line in enumerate(lines):
+        line_text = line.strip()
+        if not line_text:
+            offset += len(line)
+            continue
+
+        compact = normalize_heading(line_text)
+
+        # 1行で見出しになっている場合。
+        for normalized, heading in get_candidates(len(compact)):
+            if heading_line_matches(
+                compact, normalized, fuzzy_enabled, threshold_percent
+            ):
+                starts.append((offset, heading))
+                break
+        else:
+            # OCRで長い見出しが複数行に分割された場合。
+            joined = compact
+
+            for next_index in range(
+                line_index + 1, min(line_index + 4, len(lines))
+            ):
+                next_line = lines[next_index].strip()
+                if not next_line:
+                    continue
+
+                joined += normalize_heading(next_line)
+                found = False
+
+                for normalized, heading in get_candidates(len(joined)):
+                    if heading_line_matches(
+                        joined, normalized, fuzzy_enabled, threshold_percent
+                    ):
+                        starts.append((offset, heading))
+                        found = True
+                        break
+
+                if found:
+                    break
+
+                if len(joined) > max_heading_length:
+                    break
+
+        offset += len(line)
+
+    # 同一位置の重複を除去。
+    unique = []
+    seen = set()
+
+    for position, heading in sorted(
+        starts, key=lambda x: (x[0], -len(x[1]))
+    ):
+        key = (position, heading)
+        if key not in seen:
+            seen.add(key)
+            unique.append((position, heading))
+
+    return unique
+
+
+def split_announcements(stream, fuzzy_enabled=False, threshold_percent=90):
+    """掲載項目見出しを境界として公告単位に分割する。"""
+    starts = find_announcement_starts(
+        stream, fuzzy_enabled, threshold_percent
+    )
+    records = []
+    for index, (start, heading) in enumerate(starts):
+        end = starts[index + 1][0] if index + 1 < len(starts) else len(stream)
+        body = stream[start:end].strip()
+        if body:
+            records.append((heading, body, start, end))
+    return records
+
+def announcement_matches_target(heading, target_patterns, fuzzy_enabled=False, threshold_percent=90):
+    """INIの[官報]公告で指定された掲載項目を抽出対象にする。"""
+    normalized_heading = normalize_heading(heading)
+
+    normalized_targets = [
+        normalize_heading(x)
+        for x in target_patterns
+        if normalize_heading(x)
+    ]
+
+    # 従来の完全一致を優先
+    if normalized_heading in normalized_targets:
+        return True
+
+    if fuzzy_enabled:
+        return any(
+            fuzzy_heading_match(
+                normalized_heading, target, threshold_percent
+            )
+            for target in normalized_targets
+        )
+
+    return False
+
+def extract_court(text):
+    for line in text.splitlines():
+        line = line.strip()
+        if "地方裁判所" in line or "家庭裁判所" in line:
+            return line
+    return ""
+
+
+def court_matches(text, court_patterns):
+    """公告本文の各行を調べ、指定した裁判所パターンに一致する行を探す。"""
+    # OCRでは裁判所名の一部が誤認識されることがあるため、
+    # 最初に見つかった「地方裁判所」だけで判定しない。各行を順番に調べる。
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "地方裁判所" not in line and "家庭裁判所" not in line:
+            continue
+        if wildcard_match(line, court_patterns):
+            return True, line
+
+    # OCRで「裁判所」の一部が欠落した場合などの保険。
+    compact_text = normalize_heading(text)
+    for pattern in court_patterns:
+        literal = pattern.replace("*", "").replace("?", "")
+        if literal and literal in compact_text:
+            return True, ""
+    return False, ""
+
+
+def detect_body_horizontal_bounds(image, columns):
+    """ページ上下に連続する縦罫線を検出し、本文領域の左右端を返す。"""
+    gray = image.convert("L")
+    width, height = gray.size
+
+    # 黒画素の総数ではなく、各x列で上下方向に連続する黒画素の最長区間を調べる。
+    # 左右の本文境界線は途中で途切れないという前提で、ページ高の75%以上の連続線を候補にする。
+    threshold = 100
+    min_run = int(height * 0.75)
+    pixels = gray.load()
+    candidate_x = []
+    for x in range(width):
+        longest_run = 0
+        current_run = 0
+        for y in range(height):
+            if pixels[x, y] < threshold:
+                current_run += 1
+                if current_run > longest_run:
+                    longest_run = current_run
+            else:
+                current_run = 0
+        if longest_run >= min_run:
+            candidate_x.append(x)
+
+    # 太い縦罫線で隣接列が複数候補になる場合は、ひとつの線としてまとめる。
+    groups = []
+    for x in candidate_x:
+        if not groups or x > groups[-1][-1] + 2:
+            groups.append([x])
+        else:
+            groups[-1].append(x)
+    line_positions = [round(sum(group) / len(group)) for group in groups]
+
+    # ページ端の枠線などを避け、本文幅として十分離れた最外側の線を左右端にする。
+    if len(line_positions) < 2:
+        raise ValueError(
+            f"本文左右端の連続縦罫線を検出できません。"
+            f"最長連続線の閾値={min_run}px、検出候補={line_positions}"
+        )
+    left = line_positions[0]
+    right = line_positions[-1]
+    if right - left < width * 0.4:
+        raise ValueError("検出した本文領域がページ幅に対して狭すぎます。")
+    print(
+        f"  本文境界検出: 左={left}, 右={right}, "
+        f"上下連続縦罫線候補={line_positions}, 最小連続長={min_run}px, 段数={columns}"
+    )
+    return left, right
+
+
+def process_pdf(pdf_path, ini_path, name, page_spec=None):
+    """PDFをOCRし、次の段・次のページに続く公告を結合して抽出する。"""
+    ini_parser = read_ini(ini_path)
+
+    court_patterns = split_patterns(ini_parser.get("官報", "裁判所"))
+    announcement_patterns = split_patterns(ini_parser.get("官報", "公告"))
+    columns = ini_parser.get("官報", "段組数")
+    tesseract_path = ini_parser.get("OCR", "実行ファイル")
+    language = ini_parser.get("OCR", "言語")
+    psm = ini_parser.get("OCR", "PSM")
+    dpi = ini_parser.get("OCR", "解像度")
+    edge_level = ini_parser.get("OCR", "エッジ強調")
+    edge_settings = {
+        0: None,
+        1: parse_edge_params(ini_parser.get("OCR", "edge1"), "edge1"),
+        2: parse_edge_params(ini_parser.get("OCR", "edge2"), "edge2"),
+        3: parse_edge_params(ini_parser.get("OCR", "edge3"), "edge3"),
+    }
+    if edge_level not in (0, 1, 2, 3):
+        raise ValueError("[OCR] エッジ強調は0～3を指定してください。")
+    intermediate_output = ini_parser.get("OCR", "中間データ出力")
+    output_encoding = ini_parser.get("出力", "文字コード")
+    fuzzy_enabled = ini_parser.get("官報", "あいまい検索")
+    fuzzy_threshold = ini_parser.get("官報", "あいまい検索一致率")
+    device = ini_parser.get("OCR", "device").strip().lower()
+    if device not in ("cpu", "cuda"):
+        raise ValueError("[OCR] deviceはcpuまたはcudaを指定してください。")
+
+    if fuzzy_enabled not in (0, 1):
+        raise ValueError("[官報] あいまい検索は0または1を指定してください。")
+
+    if not 0 <= fuzzy_threshold <= 100:
+        raise ValueError("[官報] あいまい検索一致率は0～100を指定してください。")
+
+    if edge_level not in (0, 1, 2, 3):
+        raise ValueError("[OCR] エッジ強調は0～3を指定してください。")
+
+    ocr = ini_parser.get("OCR", "ocr").strip().lower()
+    ocr_executable = ini_parser.get("OCR", "実行ファイル")
+
+    if ocr not in ("tesseract", "ndlocr-lite"):
+        raise ValueError(
+            "[OCR] ocrはtesseractまたはndlocr-liteを指定してください。"
+        )
+
+    if ocr == "tesseract":
+        tesseract = find_tesseract(ocr_executable)
+    else:
+        ndlocr_lite = find_ndlocr_lite(ocr_executable)
+
+    if columns < 1:
+        raise ValueError("段組数は1以上を指定してください。")
+
+    output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi.txt")
+    ocr_output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi_ocr.txt")
+
+    if intermediate_output not in (0, 1):
+        raise ValueError("[OCR] 中間データ出力は0または1を指定してください。")
+
+    print(f"入力PDF : {pdf_path}")
+    print(f"INI     : {ini_path}")
+    print(f"裁判所  : {', '.join(court_patterns)}")
+    print(f"公告    : {', '.join(announcement_patterns)}")
+    print(f"段組数  : {columns}")
+    print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")
+    print(f"OCR方式 : {ocr}")
+    print(f"中間データ出力: {intermediate_output}")
+    print(f"氏名    : {name if name else '指定なし'}")
+    print(f"あいまい検索: {'ON' if fuzzy_enabled == 1 else 'OFF'}")
+    print(f"あいまい検索一致率: {fuzzy_threshold}%")
+    print(f"エッジ強調: {edge_level}")
+
+    # 全ページを確認し、横向きページ（縦段組み）のみOCRする。
+    # 官報では、横向きページを縦段組み、縦向きページを横段組みとして扱う。
+    chunks = []
+    pending_ocr = []  # NDL OCR-Liteの一括処理用に画像とページ・段情報を保持する。
+    skipped_portrait_pages = 0
+    processed_landscape_pages = 0
+    # 解像度ごとの共通作業フォルダー
+    ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
+    image_base_dir = ocr_work_dir / "img"
+    image_work_dir = None  #PDF専用フォルダーは最初の対象ページで作成する。
+    with pdfium.PdfDocument(str(pdf_path)) as document:
+        total_pages = len(document)
+
+        # -pの指定を、実際に処理するページ番号の集合に変換する。
+        selected_pages = parse_page_ranges(page_spec, total_pages)
+        print(
+            f"処理対象ページ: "
+            f"{', '.join(map(str, sorted(selected_pages)))}"
+        )
+
+        for page_no in range(1, total_pages + 1):
+            # 処理対象ページでなければスキップする。
+            if page_no not in selected_pages:
+                continue
+
+            page = document[page_no - 1]  # pypdfium2のページ番号は0始まり
+            try:  # ページリソースを確実に解放
+                # pypdfium2のget_rotation()は角度(90/270)ではなく、
+                # 90度単位の値(0/1/2/3)を返すため、1または3で幅・高さを入れ替える。
+                page_width, page_height = page.get_size()
+                rotation = page.get_rotation()
+                if rotation in (1, 3):
+                    page_width, page_height = page_height, page_width
+
+                if page_width <= page_height:
+                    skipped_portrait_pages += 1
+                    print(
+                        f"ページ {page_no}: 縦向き "
+                        f"({page_width:.1f} x {page_height:.1f}) のため除外 "
+                    )
+                    continue
+
+                processed_landscape_pages += 1
+
+                # PDFiumでページ全体を指定DPIで描画する。
+                # PDFに設定されたページ回転はrender()側で反映される。
+                # Pillow画像に変換してRGBに統一する。
+                full_image = page.render(scale=dpi / 72.0).to_pil().convert("RGB")
+                pixel_width, pixel_height = full_image.size
+            finally:
+                page.close()
+
+            # PDF専用の画像フォルダーを1回だけ作成する。
+            if image_work_dir is None:
+                ocr_work_dir.mkdir(parents=True, exist_ok=True)
+                image_base_dir.mkdir(parents=True, exist_ok=True)
+                image_work_dir = Path(tempfile.mkdtemp(
+                    prefix=f"{pdf_path.stem}_",
+                    dir=image_base_dir,
+                ))
+
+            # 固定割合で余白を除外せず、画像内の長い縦罫線から本文左右端を検出する。
+            # 右側の余白境界と、左側の日付・官報名・号数欄との境界を線の位置で判定する。
+            content_left, content_right = detect_body_horizontal_bounds(full_image, columns)
+            content_width = content_right - content_left
+            if content_width <= 0:
+                raise ValueError(f"ページ {page_no}: 本文領域の幅が不正です。")
+
+            for column_no in range(columns):
+                # 左の欄・右余白を除外した本文領域を段数で分割する。
+                # 端数は各境界を個別に丸め、隙間や重複を避ける。
+                left = content_left + round(column_no * content_width / columns)
+                right = content_left + round((column_no + 1) * content_width / columns)
+                column_image = full_image.crop((left, 0, right, pixel_height))
+                # OCR用画像の前処理（グレースケール・コントラスト調整・エッジ強調・エッジsetting）
+                column_image = preprocess_image(column_image, edge_level, edge_settings)
+
+                #画像名にも解像度・ページ・段番号を含め、作業フォルダーに保存する。
+                image_path = image_work_dir / (
+                    f"{pdf_path.stem}_{dpi}dpi_p{page_no:04d}_c{column_no + 1}.png"
+                )
+                column_image.save(str(image_path))
+
+                if ocr == "tesseract":  # Tesseractは従来どおり画像ごとにOCRする。
+                    try:
+                        ocr_text = run_tesseract(tesseract, image_path, language, psm)
+                        text = normalize_text(ocr_text)
+                    finally:
+                        if intermediate_output == 0:
+                            try:
+                                image_path.unlink()
+                            except OSError:
+                                pass
+                    if text:
+                        chunks.append(
+                            {"page": page_no, "column": column_no + 1, "text": text}
+                        )
+                else:  # NDL OCR-Liteは全画像作成後にフォルダー単位で一括実行する。
+                    pending_ocr.append(
+                        {
+                            "image_path": image_path,
+                            "page": page_no,
+                            "column": column_no + 1,
+                        }
+                    )
+
+    # NDL OCR-Liteは全ページ・全段の画像作成が終わってから一度だけ起動する。
+    if ocr == "ndlocr-lite" and pending_ocr:
+        image_paths = [item["image_path"] for item in pending_ocr]
+        ocr_results = run_ndlocr_lite_batch(
+            ndlocr_lite,
+            image_work_dir,
+            ocr_work_dir,
+            image_paths,
+            viz=(intermediate_output == 1),
+            device=device,
+        )
+        for item, ocr_text in zip(pending_ocr, ocr_results):
+            text = normalize_text(ocr_text)
+            if text:
+                chunks.append(
+                    {
+                        "page": item["page"],
+                        "column": item["column"],
+                        "text": text,
+                    }
+                )
+
+    print(
+        f"ページ向き判定: 横向き {processed_landscape_pages} ページを処理、"
+        f"縦向き {skipped_portrait_pages} ページを除外"
+    )
+
+    start_time = time.perf_counter()
+    # 各段の境界を保持しつつ、OCR文字列を1本の連続ストリームにする。
+    # 公告が段やページをまたいでも途中で切らず、次の公告まで保持する。
+    stream_parts = []
+    positions = []
+    cursor = 0
+
+    for chunk in chunks:
+        marker = f"\n\n[PAGE={chunk['page']},COLUMN={chunk['column']}]\n"
+        start = cursor + len(marker)
+        stream_parts.append(marker)
+        stream_parts.append(chunk["text"])
+        end = start + len(chunk["text"])
+        positions.append((start, end, chunk["page"], chunk["column"]))
+        cursor = end
+
+    stream = "".join(stream_parts)
+    print(f"stream作成: {time.perf_counter() - start_time:.2f}秒", flush=True)
+    start_time = time.perf_counter()
+
+    # 中間OCRデータを、入力PDFと同じフォルダーに保存する。
+    # ページ・段番号を残すため、検索処理とは独立した確認用データとする。
+    if intermediate_output == 1:
+        with open(ocr_output_path, "w", encoding=output_encoding) as fp:
+            fp.write(f"入力PDF: {pdf_path}\n")
+            fp.write("=" * 80 + "\n\n")
+            for chunk in chunks:
+                fp.write(f"[ページ={chunk['page']}, 段={chunk['column']}]\n")
+                fp.write(chunk["text"])
+                fp.write("\n\n")
+        print(f"中間OCR TXT: {ocr_output_path}")
+
+    # 中間OCRデータの集約保存後に、作業用ファイルを削除する。
+    # 中間データ出力=1の場合は、個別の中間ファイルも残す。
+    if intermediate_output == 0:
+        if ocr_work_dir.exists():
+            # NDL OCR-Liteの個別TXT・JSON・XMLなどを削除する。
+            for temp_path in ocr_work_dir.iterdir():
+                if temp_path.is_file() and (
+                    temp_path.suffix.lower() in (".txt", ".png", ".json", ".xml")
+                    and temp_path.name.startswith(f"{pdf_path.stem}_{dpi}dpi_")
+                ):
+                    try:
+                        temp_path.unlink()
+                    except OSError as e:
+                        print(f"警告: 一時ファイルを削除できません: {temp_path}: {e}")
+
+            # 実際に作成したPDF専用画像フォルダーを削除する。
+            # mkdtemp()で作成したランダムなフォルダー名をそのまま使用する。
+            if image_work_dir is not None and image_work_dir.exists():
+                for image_path in image_work_dir.glob("*.png"):
+                    try:
+                        image_path.unlink()
+                    except OSError as e:
+                        print(f"警告: OCR画像を削除できません: {image_path}: {e}")
+
+                try:
+                    image_work_dir.rmdir()
+                except OSError:
+                    pass
+
+            # imgフォルダーは空の場合だけ削除する。
+            if image_base_dir.exists():
+                try:
+                    image_base_dir.rmdir()
+                except OSError:
+                    pass
+
+            # 作業フォルダーは空の場合だけ削除する。
+            try:
+                ocr_work_dir.rmdir()
+            except OSError:
+                pass
+
+    print(f"中間データ処理: {time.perf_counter() - start_time:.2f}秒", flush=True)
+    start_time = time.perf_counter()
+
+    # 「次の公告開始」までを現在の公告として保持する。
+    raw_records = split_announcements(stream, fuzzy_enabled == 1, fuzzy_threshold)
+    print(
+        f"公告分割: {time.perf_counter() - start_time:.2f}秒"
+        f"（{len(raw_records)}件）",
+        flush=True,
+    )
+    start_time = time.perf_counter()
+
+    matches = []
+    for announcement, body, start_pos, end_pos in raw_records:
+        # ANNOUNCEMENT_HEADINGSは「公告の境界」だけを判定する。
+        # 実際に抽出する公告はINIの[官報]公告との完全一致で決定する。
+        if not announcement_matches_target(announcement, announcement_patterns, fuzzy_enabled == 1, fuzzy_threshold):
+            continue
+
+        matched, court = court_matches(body, court_patterns)
+        if not matched:
+            continue
+
+        # 氏名は公告全体を対象に検索する。
+        if name and name not in body:
+            continue
+
+        first_page = ""
+        first_column = ""
+        for start, end, page_no, column_no in positions:
+            if start <= start_pos < end:
+                first_page = page_no
+                first_column = column_no
+                break
+
+        last_page = ""
+        last_column = ""
+        for start, end, page_no, column_no in positions:
+            if start < end_pos <= end or (start_pos < end and end_pos >= end):
+                last_page = page_no
+                last_column = column_no
+                break
+
+        matches.append(
+            {
+                "announcement": announcement,
+                "page": first_page,
+                "column": first_column,
+                "end_page": last_page,
+                "end_column": last_column,
+                "court": court,
+                "text": body,
+            }
+        )
+    print(f"公告検索: {time.perf_counter() - start_time:.2f}秒", flush=True)
+
+    with open(output_path, "w", encoding=output_encoding) as fp:
+        fp.write("検索結果\n")
+        fp.write(f"スクリプト版数: {__version_short__.split(',')[0]}\n")
+        fp.write(f"Python版数: {platform.python_version()} ({platform.architecture()[0]})\n")
+        fp.write("ライブラリ版数:\n")
+        fp.write(f"  pypdfium2: {get_package_version('pypdfium2')}\n")
+        fp.write(f"  Pillow: {get_package_version('Pillow')}\n")
+        fp.write(f"  ini_cfg_parser: {get_package_version('ini_cfg_parser')}\n")
+        fp.write(f"OCRエンジン: {ocr} {get_ocr_version(ocr, ocr_executable)}\n")
+        fp.write(f"解像度: {dpi} DPI\n")
+        fp.write(f"エッジ強調: {edge_level}\n")
+        fp.write("=" * 80 + "\n")
+        fp.write(f"入力PDF: {pdf_path}\n")
+        fp.write(f"裁判所: {', '.join(court_patterns)}\n")
+        fp.write(f"氏名: {name if name else '指定なし'}\n")
+        fp.write(f"該当件数: {len(matches)}\n")
+        fp.write("=" * 80 + "\n\n")
+
+        for index, item in enumerate(matches, start=1):
+            fp.write(f"[{index}]\n")
+            fp.write(f"公告: {item['announcement']}\n")
+            fp.write(f"開始ページ: {item['page']}\n")
+            fp.write(f"開始段: {item['column']}\n")
+            fp.write(f"終了ページ: {item['end_page']}\n")
+            fp.write(f"終了段: {item['end_column']}\n")
+            fp.write(f"裁判所: {item['court']}\n")
+            fp.write("-" * 80 + "\n")
+            fp.write(item["text"])
+            fp.write("\n\n")
+
+    print(f"出力TXT : {output_path}")
+    print(f"該当件数: {len(matches)}")
+    return OK_VAL
+
+def parse_page_ranges(page_spec, total_pages):
+    """ページ指定文字列を処理対象ページ番号の集合に変換する。"""
+
+    # -pを指定しなかった場合は、全ページを処理対象にする。
+    if not page_spec:
+        return set(range(1, total_pages + 1))
+
+    pages = set()
+
+    for part in page_spec.split(","):
+        part = part.strip()
+
+        if not part:
+            continue
+
+        # 1個のページ番号
+        if "-" not in part:
+            page = int(part)
+
+            if page < 1 or page > total_pages:
+                raise ValueError(
+                    f"ページ番号が範囲外です: {part}"
+                )
+
+            pages.add(page)
+            continue
+
+        start, end = part.split("-", 1)
+        start = start.strip()
+        end = end.strip()
+
+        # 7-10 → 7～10ページ
+        if start and end:
+            start_page = int(start)
+            end_page = int(end)
+
+            if start_page < 1 or end_page < 1:
+                raise ValueError(
+                    f"ページ番号は1以上を指定してください: {part}"
+                )
+
+            if start_page > end_page:
+                raise ValueError(
+                    f"ページ範囲が不正です: {part}"
+                )
+
+            if end_page > total_pages:
+                raise ValueError(
+                    f"ページ番号がPDFのページ数を超えています: {part}"
+                )
+
+            pages.update(range(start_page, end_page + 1))
+
+        # 7- → 7ページ以降
+        elif start:
+            start_page = int(start)
+
+            if start_page < 1 or start_page > total_pages:
+                raise ValueError(
+                    f"ページ番号が範囲外です: {part}"
+                )
+
+            pages.update(range(start_page, total_pages + 1))
+
+        # -10 → 1～10ページ
+        else:
+            end_page = int(end)
+
+            if end_page < 1 or end_page > total_pages:
+                raise ValueError(
+                    f"ページ番号が範囲外です: {part}"
+                )
+
+            pages.update(range(1, end_page + 1))
+
+    return pages
+
+def is_page_selected(page_no, page_spec, total_pages):
+    """指定されたページが処理対象か判定する。"""
+    if not page_spec:
+        return True
+
+    for part in page_spec.split(","):
+        part = part.strip()
+
+        if not part:
+            continue
+
+        if "-" not in part:
+            if page_no == int(part):
+                return True
+            continue
+
+        start, end = part.split("-", 1)
+        start = start.strip()
+        end = end.strip()
+
+        if start and end:
+            if int(start) <= page_no <= int(end):
+                return True
+
+        elif start:
+            # 10- → 10ページ以降
+            if page_no >= int(start):
+                return True
+
+        else:
+            # -10 → 1～10ページ
+            if page_no <= int(end):
+                return True
+
+    return False
+
+def fuzzy_heading_match(text, heading, threshold_percent=90):
+    """OCR誤認識を許容し、見出しの類似度で判定する。"""
+    text = normalize_heading(text)
+    heading = normalize_heading(heading)
+
+    if not text or not heading:
+        return False
+
+    # 文字数の差が大きい場合は誤一致を避ける
+    max_length_diff = max(2, int(len(heading) * 0.05))
+    if abs(len(text) - len(heading)) > max_length_diff:
+        return False
+
+    # INIのパーセント値を使って類似度を判定
+    similarity = SequenceMatcher(None, text, heading).ratio() * 100
+    return similarity >= threshold_percent
+
+def preprocess_image(image: Image.Image, level: int = 1, settings: dict = None,) -> Image.Image:
+    """OCR用の画像前処理"""
+
+    # 整数型と範囲を確認
+    if type(level) is not int or level not in (0, 1, 2, 3):
+        raise ValueError("エッジ強調レベルは0～3を指定してください。")
+
+    #レベル0は画像加工を行わず、そのまま返す
+    if level == 0:
+        return image
+
+    if settings is None:
+        raise ValueError("画像加工の設定(settings)が指定されていません。")
+
+    if not isinstance(settings, dict) or level not in settings:
+        raise ValueError(f"エッジ強調レベル{level}の設定がありません。")
+
+    params = settings[level]
+
+    if not isinstance(params, (list, tuple)) or len(params) != 3:
+        raise ValueError(
+            f"エッジ強調レベル{level}の設定には3個のパラメータを指定してください。"
+        )
+
+    # 数値型と有限値を確認
+    if not all(type(v) in (int, float) and math.isfinite(v) for v in params):
+        raise ValueError(f"エッジ強調レベル{level}の設定には有限の数値を指定してください。")
+
+    radius = float(params[0])
+    if not 0.1 <= radius <= 10.0:
+        raise ValueError("radiusは0.1～10.0を指定してください。")
+
+    # 整数として扱える値か確認
+    if not params[1].is_integer() if isinstance(params[1], float) else False:
+        raise ValueError("percentには整数を指定してください。")
+
+    percent = int(params[1])
+    if not 0 <= percent <= 500:
+        raise ValueError("percentは0～500を指定してください。")
+
+    if not params[2].is_integer() if isinstance(params[2], float) else False:
+        raise ValueError("thresholdには整数を指定してください。")
+
+    threshold = int(params[2])
+    if not 0 <= threshold <= 255:
+        raise ValueError("thresholdは0～255を指定してください。")
+
+    # グレースケール化
+    image = image.convert("L")
+
+    # コントラスト調整
+    image = ImageOps.autocontrast(image)
+
+    # UnsharpMask   輪郭を強調する強さなどを数値で指定
+    # radius, percent, threshold
+    # パラメータ    意味                        調整の考え方
+    # radius        強調する輪郭の範囲          大きくすると広い範囲に作用
+    # percent       強調する強さ（%）           大きくすると強調が強くなる
+    # threshold     強調対象とする明るさの差    大きくすると小さな変化やノイズを強調しにくい
+
+    # エッジ強調
+    image = image.filter(
+        ImageFilter.UnsharpMask(
+            radius=radius,
+            percent=percent,
+            threshold=threshold
+        )
+    )
+
+    return image
+
+
+def get_ocr_version(ocr, ocr_executable):
+    """使用するOCRエンジンのバージョンを取得する。"""
+    try:
+        if ocr == "tesseract":
+            # Tesseractは実行ファイルの--versionから取得
+            exe_path = find_tesseract(ocr_executable)
+            result = subprocess.run(
+                [str(exe_path), "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
+
+            output = result.stdout.strip() or result.stderr.strip()
+
+            if result.returncode == 0 and output:
+                version = output.splitlines()[0].strip()
+                prefix = "tesseract "
+                if version.lower().startswith(prefix):
+                    version = version[len(prefix):]
+                return version
+
+        elif ocr == "ndlocr-lite":
+            # NDL OCR-Liteはuv tool listから取得
+            result = subprocess.run(
+                ["uv", "tool", "list"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("ndlocr-lite v"):
+                        return line.split(" v", 1)[1].strip()
+
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    return "取得失敗"
+
 
 # 情報元
 # 官報情報サービス"掲載項目名一覧"
@@ -954,1207 +2243,6 @@ ANNOUNCEMENT_HEADINGS = [
     'その他（報告）',
     'その他（政府調達）',
 ]
-
-def main(args=None) -> None:
-    all_start_time = time.perf_counter()
-    parser = argparse.ArgumentParser(
-        prog=SCR_PATH.name,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent(
-            f"""\
-            version={__version__}
-            官報をOCRでテキスト化し、
-            INIで指定した裁判所と、必要に応じて氏名で抽出します。
-
-            官報掲載項目の固定一覧を公告境界のマスターとして使用し、
-            次の段・次のページに続く同一公告は結合します。
-
-            Copyright :{__copyright__}
-            author :{__author__}
-            """
-        ),
-    )
-    parser.add_argument(
-        "-v", "--version", action="version",
-        version=f"{SCR_PATH.name} version={__version__}",
-    )
-    parser.add_argument(
-        "input_pdf",
-        nargs="+",
-        help="入力する官報PDF（複数指定可）",
-    )
-    parser.add_argument(
-        "-n", "--name",
-        help="氏名。指定した場合は裁判所 AND 氏名で絞り込みます。",
-    )
-    parser.add_argument(
-        "-c", "--config",
-        default=str(DEFAULT_INI),
-        help=f"INIファイル。既定値: {DEFAULT_INI.name}",
-    )
-    parser.add_argument(
-        "-p",
-        "--pages",
-        help="処理するページを指定（例: 7-10,11,13 / 10- / -10）"
-    )
-
-    parsed = parser.parse_args(args)
-    ini_path = Path(parsed.config).resolve()
-
-    if not ini_path.is_file():
-        # -c未指定の既定INIは自動作成する。
-        if parsed.config == str(DEFAULT_INI):
-            try:
-                create_default_ini(ini_path)
-            except OSError as e:
-                print(f"INIファイルの作成に失敗しました: {ini_path}")
-                print(f"ERROR: {e}")
-                return NG_VAL
-        else:
-            print(f"指定されたINIファイルが見つかりません: {ini_path}")
-            return NG_VAL
-
-    result = OK_VAL
-    for input_pdf in parsed.input_pdf:
-        start_time = time.perf_counter()
-        pdf_path = Path(input_pdf).resolve()
-
-        if not pdf_path.is_file():
-            print(f"入力PDFが見つかりません: {pdf_path}")
-            result = NG_VAL
-            continue
-
-        try:
-            if process_pdf(pdf_path, ini_path, parsed.name, parsed.pages) != OK_VAL:
-                result = NG_VAL
-        except Exception as e:
-            print(f"ERROR: {e}")
-            result = NG_VAL
-        elapsed_time = time.perf_counter() - start_time
-        print(f"処理時間: {elapsed_time:.2f} 秒")
-
-    elapsed_time = time.perf_counter() - all_start_time
-    print(f"total処理時間: {elapsed_time:.2f} 秒")
-    return result
-
-
-def get_package_version(package_name: str) -> str:  # ライブラリ版数取得用関数
-    """インストール済みPythonパッケージの版数を返す。"""
-    try:
-        return package_version(package_name)
-    except PackageNotFoundError:
-        return "不明"
-
-
-def get_ini_dict_val() -> ini.IniDict:
-    return {
-        "官報": {
-            "裁判所": {"type": str, "inf": "*地方裁判所*"},
-            "段組数": {"type": int, "inf": 4},
-            "公告": {"type": List[str], "inf": ["破産手続開始"]},
-            "あいまい検索": {"type": int, "inf": 1},
-            "あいまい検索一致率": {"type": int, "inf": 90},
-        },
-        "OCR": {
-            "ocr": {"type": str, "inf": "ndlocr-lite"},
-            "実行ファイル": {"type": str, "inf": ""},
-            "言語": {"type": str, "inf": "jpn"},
-            "PSM": {"type": int, "inf": 6},
-            "解像度": {"type": int, "inf": 300},
-            "エッジ強調": {"type": int, "inf": 0},
-            "edge1": {"type": str, "inf": "1.0,100,0"},
-            "edge2": {"type": str, "inf": "2.0,150,0"},
-            "edge3": {"type": str, "inf": "3.0,200,0"},
-            "中間データ出力": {"type": int, "inf": 0},
-        },
-        "出力": {
-            "文字コード": {"type": str, "inf": "utf-8"},
-        },
-    }
-
-
-def create_default_ini(ini_path: Path) -> None:
-    """INIファイルが存在しない場合、デフォルト設定で作成する。"""
-    ini_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "; 官報検索設定",
-        "; 日本語UTF-8で保存してください。",
-        "",
-        "[官報]",
-        "; 裁判所はワイルドカード * と ? に対応",
-        "; 複数指定する場合はカンマ区切り",
-        "裁判所=*地方裁判所*",
-        "",
-        "; 今回の官報は4段組",
-        "段組数=4",
-        "; あいまい検索: 0=無効、1=有効",
-        "あいまい検索=1",
-        "; あいまい検索の一致率（0～100）",
-        "あいまい検索一致率=90",
-        "",
-        "; OCRで抽出対象にする公告名",
-        "; 複数指定する場合はカンマ区切り",
-        "公告=破産手続開始,破産手続開始及び免責許可申立てに関する意見申述期間",
-        "",
-        "[OCR]",
-        "; OCRエンジン: tesseract または ndlocr-lite",
-        "ocr=ndlocr-lite",
-        "; 空欄ならPATHまたは標準的なWindowsインストール先を検索",
-        "実行ファイル=",
-        "言語=jpn",
-        "PSM=6",
-        "; NDLOCR-Lite実行デバイス: cpu または cuda",
-        "device=cpu",
-        "解像度=300",
-        "; エッジ強調: 0=無効、1=弱、2=標準、3=強",
-        "エッジ強調=0",
-        "; エッジ強調パラメータ: Radius, Percent, Threshold",
-        "edge1=1.0,100,0",
-        "edge2=2.0,150,0",
-        "edge3=3.0,200,0",
-        "中間データ出力=0",
-        "",
-        "[出力]",
-        "文字コード=utf-8",
-        "",
-    ]
-    ini_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"INIファイルを作成しました: {ini_path}")
-
-
-def read_ini(ini_path: Path):
-    return ini.IniParser(str(ini_path), get_ini_dict_val(), "utf8")
-
-
-def parse_edge_params(value: str, key: str) -> tuple:
-    """INIのエッジ強調設定を検証し、適切な型に変換する。"""
-
-    try:
-        values = [v.strip() for v in value.split(",")]
-
-        if len(values) != 3 or any(not v for v in values):
-            raise ValueError("設定値は3個必要です。")
-
-        params = [float(values[0]), float(values[1]), float(values[2])]
-
-    except (ValueError, AttributeError) as e:
-        raise ValueError(f"{key}の設定値が不正です: {value}") from e
-
-    # 数値型と有限値を確認
-    if not all(type(v) in (int, float) and math.isfinite(v) for v in params):
-        raise ValueError(f"{key}には有限の数値を指定してください。")
-
-    radius = float(params[0])
-    if not 0.1 <= radius <= 10.0:
-        raise ValueError(f"{key}: radiusは0.1～10.0を指定してください。")
-
-    # 整数として扱える値か確認
-    if isinstance(params[1], float) and not params[1].is_integer():
-        raise ValueError("percentには整数を指定してください。")
-
-    percent = int(params[1])
-    if not 0 <= percent <= 500:
-        raise ValueError(f"{key}: percentは0～500を指定してください。")
-
-    if not params[2].is_integer():
-        raise ValueError(f"{key}: thresholdには整数を指定してください。")
-
-    threshold = int(params[2])
-    if not 0 <= threshold <= 255:
-        raise ValueError(f"{key}: thresholdは0～255を指定してください。")
-
-    return radius, percent, threshold
-
-
-def split_patterns(value):
-    if isinstance(value, str):
-        return [x.strip() for x in value.split(",") if x.strip()]
-    return [str(x).strip() for x in value if str(x).strip()]
-
-
-def wildcard_match(text, patterns):
-    text = text.strip()
-    return any(fnmatch.fnmatchcase(text, pattern) for pattern in patterns)
-
-
-def find_tesseract(configured_path: str) -> str:
-    if configured_path:
-        path = Path(os.path.expandvars(os.path.expanduser(configured_path)))
-        if path.exists():
-            return str(path)
-
-    found = shutil.which("tesseract")
-    if found:
-        return found
-
-    candidates = [
-        Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
-        Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
-    ]
-    for path in candidates:
-        if path.exists():
-            return str(path)
-
-    raise FileNotFoundError(
-        "Tesseract OCR が見つかりません。INIの [OCR] 実行ファイル に "
-        "tesseract.exe のフルパスを指定してください。"
-    )
-
-
-def run_tesseract(tesseract, image_path, language, psm):
-    command = [
-        tesseract, str(image_path), "stdout",
-        "-l", language, "--psm", str(psm),
-    ]
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Tesseract OCRに失敗しました。\n{result.stderr.strip()}"
-        )
-    return result.stdout
-
-
-def find_ndlocr_lite(configured_path: str) -> str:
-    if configured_path:
-        path = Path(os.path.expandvars(os.path.expanduser(configured_path)))
-        if path.exists():
-            return str(path)
-
-    found = shutil.which("ndlocr-lite")
-    if found:
-        return found
-
-    candidates = [
-        Path(os.path.expandvars(r"%USERPROFILE%\.local\bin\ndlocr-lite.exe")),
-    ]
-    for path in candidates:
-        if path.exists():
-            return str(path)
-
-    raise FileNotFoundError(
-        "ndlocr-lite が見つかりません。INIの [OCR] 実行ファイル に "
-        "ndlocr-lite.exe のフルパスを指定してください。"
-    )
-
-
-def run_ndlocr_lite_batch(ndlocr_lite, source_dir, output_dir, image_paths, viz=False, device="cpu"):
-    """画像フォルダー内のPNGをNDL OCR-Liteで一括OCRする。"""
-    source_dir = Path(source_dir)
-    output_dir = Path(output_dir)
-    source_dir.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    #同名の古いOCR結果が残っていると誤読するため、対象画像分だけ先に削除する。
-    for image_path in image_paths:
-        for suffix in (".txt", ".json", ".xml"):
-            old_path = output_dir / f"{Path(image_path).stem}{suffix}"
-            if old_path.exists():
-                old_path.unlink()
-
-    command = [
-        ndlocr_lite,
-        "--sourcedir", str(source_dir),
-        "--out", str(output_dir),
-        "--device", device,
-    ]
-    if viz:
-        command.extend(["--viz", "True"])
-
-    # OCR結果TXTの作成数を定期的に確認し、完了段数を表示する。
-    # NDL OCR-Lite自体に進捗表示がなくても、完了した画像数を確認できる。
-    total_images = len(image_paths)
-    started_at = time.monotonic()
-    last_display = -1
-    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as log_file:
-        process = subprocess.Popen(
-            command,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-
-        while process.poll() is None:
-            completed = sum(
-                1 for image_path in image_paths
-                if (output_dir / f"{Path(image_path).stem}.txt").is_file()
-            )
-            if completed != last_display:
-                elapsed = time.monotonic() - started_at
-                percent = completed * 100 / total_images if total_images else 100
-                print(
-                    f"\rNDL OCR-Lite処理中: {completed}/{total_images}段 "
-                    f"({percent:.1f}%) 経過 {elapsed:.1f}秒",
-                    end="", flush=True,
-                )
-                last_display = completed
-            time.sleep(0.5)
-
-        return_code = process.returncode
-        log_file.seek(0)
-        process_output = log_file.read().strip()
-
-    elapsed = time.monotonic() - started_at
-    completed = sum(
-        1 for image_path in image_paths
-        if (output_dir / f"{Path(image_path).stem}.txt").is_file()
-    )
-    print(
-        f"\rNDL OCR-Lite処理完了: {completed}/{total_images}段 "
-        f"({elapsed:.1f}秒)" + " " * 10
-    )
-
-    if return_code != 0:
-        raise RuntimeError(
-            f"ndlocr-lite一括OCRに失敗しました。\n{process_output}"
-        )
-
-    #一括処理後、画像と同じベース名のTXTを順番どおり読み込む。
-    ocr_results = []
-    for image_path in image_paths:
-        txt_path = output_dir / f"{Path(image_path).stem}.txt"
-        if not txt_path.is_file():
-            raise RuntimeError(
-                f"ndlocr-liteのOCR結果TXTが見つかりません。\n"
-                f"期待したファイル: {txt_path}"
-            )
-        ocr_results.append(
-            txt_path.read_text(encoding="utf-8", errors="replace")
-        )
-    return ocr_results
-
-
-def normalize_text(text):
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
-
-
-def normalize_heading(text):
-    """見出し比較用。OCRによる改行・空白の差を吸収する。"""
-    return re.sub(r"\s+", "", text).strip()
-
-
-def heading_line_matches(compact, normalized_heading, fuzzy_search=False, threshold_percent=90):
-    """OCRの誤認識や見出し末尾の余分な文字を考慮して判定する。"""
-    if compact == normalized_heading:
-        return True
-
-    if compact.startswith(normalized_heading):
-        # 官報OCRで見出しの後ろに段番号などが混入する場合
-        suffix = compact[len(normalized_heading):]
-        if len(suffix) <= 4 and re.fullmatch(
-            r"[0-9０-９|｜:：iIlTt!]+", suffix
-        ):
-            return True
-
-    if fuzzy_search:
-        return fuzzy_heading_match(
-            compact, normalized_heading, threshold_percent
-        )
-
-    return False
-
-def find_announcement_starts(stream, fuzzy_enabled=False, threshold_percent=90):
-    """官報掲載項目一覧から、公告見出しの開始位置を検出する。"""
-    lines = stream.splitlines(keepends=True)
-    starts = []
-    offset = 0
-    normalized_headings = sorted(
-        ((normalize_heading(h), h) for h in ANNOUNCEMENT_HEADINGS),
-        key=lambda x: len(x[0]),
-        reverse=True,
-    )
-
-    for line_index, line in enumerate(lines):
-        line_text = line.strip()
-        if not line_text:
-            offset += len(line)
-            continue
-
-        compact = normalize_heading(line_text)
-
-        # 1行で見出しになっている場合。
-        for normalized, heading in normalized_headings:
-            if heading_line_matches(compact, normalized, fuzzy_enabled, threshold_percent):
-                starts.append((offset, heading))
-                break
-        else:
-            # OCRで長い見出しが複数行に分割された場合。
-            joined = compact
-            for next_index in range(line_index + 1, min(line_index + 4, len(lines))):
-                next_line = lines[next_index].strip()
-                if not next_line:
-                    continue
-                joined += normalize_heading(next_line)
-                found = False
-                for normalized, heading in normalized_headings:
-                    if heading_line_matches(joined, normalized, fuzzy_enabled, threshold_percent):
-                        starts.append((offset, heading))
-                        found = True
-                        break
-                if found:
-                    break
-                if len(joined) > len(normalized_headings[0][0]):
-                    break
-
-        offset += len(line)
-
-    # 同一位置の重複を除去。
-    unique = []
-    seen = set()
-    for position, heading in sorted(starts, key=lambda x: (x[0], -len(x[1]))):
-        key = (position, heading)
-        if key not in seen:
-            seen.add(key)
-            unique.append((position, heading))
-    return unique
-
-
-def split_announcements(stream, fuzzy_enabled=False, threshold_percent=90):
-    """掲載項目見出しを境界として公告単位に分割する。"""
-    starts = find_announcement_starts(
-        stream, fuzzy_enabled, threshold_percent
-    )
-    records = []
-    for index, (start, heading) in enumerate(starts):
-        end = starts[index + 1][0] if index + 1 < len(starts) else len(stream)
-        body = stream[start:end].strip()
-        if body:
-            records.append((heading, body, start, end))
-    return records
-
-def announcement_matches_target(heading, target_patterns, fuzzy_enabled=False, threshold_percent=90):
-    """INIの[官報]公告で指定された掲載項目を抽出対象にする。"""
-    normalized_heading = normalize_heading(heading)
-
-    normalized_targets = [
-        normalize_heading(x)
-        for x in target_patterns
-        if normalize_heading(x)
-    ]
-
-    # 従来の完全一致を優先
-    if normalized_heading in normalized_targets:
-        return True
-
-    if fuzzy_enabled:
-        return any(
-            fuzzy_heading_match(
-                normalized_heading, target, threshold_percent
-            )
-            for target in normalized_targets
-        )
-
-    return False
-
-def extract_court(text):
-    for line in text.splitlines():
-        line = line.strip()
-        if "地方裁判所" in line or "家庭裁判所" in line:
-            return line
-    return ""
-
-
-def court_matches(text, court_patterns):
-    """公告本文の各行を調べ、指定した裁判所パターンに一致する行を探す。"""
-    # OCRでは裁判所名の一部が誤認識されることがあるため、
-    # 最初に見つかった「地方裁判所」だけで判定しない。各行を順番に調べる。
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if "地方裁判所" not in line and "家庭裁判所" not in line:
-            continue
-        if wildcard_match(line, court_patterns):
-            return True, line
-
-    # OCRで「裁判所」の一部が欠落した場合などの保険。
-    compact_text = normalize_heading(text)
-    for pattern in court_patterns:
-        literal = pattern.replace("*", "").replace("?", "")
-        if literal and literal in compact_text:
-            return True, ""
-    return False, ""
-
-
-def detect_body_horizontal_bounds(image, columns):
-    """ページ上下に連続する縦罫線を検出し、本文領域の左右端を返す。"""
-    gray = image.convert("L")
-    width, height = gray.size
-
-    # 黒画素の総数ではなく、各x列で上下方向に連続する黒画素の最長区間を調べる。
-    # 左右の本文境界線は途中で途切れないという前提で、ページ高の75%以上の連続線を候補にする。
-    threshold = 100
-    min_run = int(height * 0.75)
-    pixels = gray.load()
-    candidate_x = []
-    for x in range(width):
-        longest_run = 0
-        current_run = 0
-        for y in range(height):
-            if pixels[x, y] < threshold:
-                current_run += 1
-                if current_run > longest_run:
-                    longest_run = current_run
-            else:
-                current_run = 0
-        if longest_run >= min_run:
-            candidate_x.append(x)
-
-    # 太い縦罫線で隣接列が複数候補になる場合は、ひとつの線としてまとめる。
-    groups = []
-    for x in candidate_x:
-        if not groups or x > groups[-1][-1] + 2:
-            groups.append([x])
-        else:
-            groups[-1].append(x)
-    line_positions = [round(sum(group) / len(group)) for group in groups]
-
-    # ページ端の枠線などを避け、本文幅として十分離れた最外側の線を左右端にする。
-    if len(line_positions) < 2:
-        raise ValueError(
-            f"本文左右端の連続縦罫線を検出できません。"
-            f"最長連続線の閾値={min_run}px、検出候補={line_positions}"
-        )
-    left = line_positions[0]
-    right = line_positions[-1]
-    if right - left < width * 0.4:
-        raise ValueError("検出した本文領域がページ幅に対して狭すぎます。")
-    print(
-        f"  本文境界検出: 左={left}, 右={right}, "
-        f"上下連続縦罫線候補={line_positions}, 最小連続長={min_run}px, 段数={columns}"
-    )
-    return left, right
-
-
-def process_pdf(pdf_path, ini_path, name, page_spec=None):
-    """PDFをOCRし、次の段・次のページに続く公告を結合して抽出する。"""
-    ini_parser = read_ini(ini_path)
-
-    court_patterns = split_patterns(ini_parser.get("官報", "裁判所"))
-    announcement_patterns = split_patterns(ini_parser.get("官報", "公告"))
-    columns = ini_parser.get("官報", "段組数")
-    tesseract_path = ini_parser.get("OCR", "実行ファイル")
-    language = ini_parser.get("OCR", "言語")
-    psm = ini_parser.get("OCR", "PSM")
-    dpi = ini_parser.get("OCR", "解像度")
-    edge_level = ini_parser.get("OCR", "エッジ強調")
-    edge_settings = {
-        0: None,
-        1: parse_edge_params(ini_parser.get("OCR", "edge1"), "edge1"),
-        2: parse_edge_params(ini_parser.get("OCR", "edge2"), "edge2"),
-        3: parse_edge_params(ini_parser.get("OCR", "edge3"), "edge3"),
-    }
-    if edge_level not in (0, 1, 2, 3):
-        raise ValueError("[OCR] エッジ強調は0～3を指定してください。")
-    intermediate_output = ini_parser.get("OCR", "中間データ出力")
-    output_encoding = ini_parser.get("出力", "文字コード")
-    fuzzy_enabled = ini_parser.get("官報", "あいまい検索")
-    fuzzy_threshold = ini_parser.get("官報", "あいまい検索一致率")
-    device = ini_parser.get("OCR", "device").strip().lower()
-    if device not in ("cpu", "cuda"):
-        raise ValueError("[OCR] deviceはcpuまたはcudaを指定してください。")
-
-    if fuzzy_enabled not in (0, 1):
-        raise ValueError("[官報] あいまい検索は0または1を指定してください。")
-
-    if not 0 <= fuzzy_threshold <= 100:
-        raise ValueError("[官報] あいまい検索一致率は0～100を指定してください。")
-
-    if edge_level not in (0, 1, 2, 3):
-        raise ValueError("[OCR] エッジ強調は0～3を指定してください。")
-
-    ocr = ini_parser.get("OCR", "ocr").strip().lower()
-    ocr_executable = ini_parser.get("OCR", "実行ファイル")
-
-    if ocr not in ("tesseract", "ndlocr-lite"):
-        raise ValueError(
-            "[OCR] ocrはtesseractまたはndlocr-liteを指定してください。"
-        )
-
-    if ocr == "tesseract":
-        tesseract = find_tesseract(ocr_executable)
-    else:
-        ndlocr_lite = find_ndlocr_lite(ocr_executable)
-
-    if columns < 1:
-        raise ValueError("段組数は1以上を指定してください。")
-
-    output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi.txt")
-    ocr_output_path = pdf_path.with_name(pdf_path.stem + f"_{dpi}dpi_ocr.txt")
-
-    if intermediate_output not in (0, 1):
-        raise ValueError("[OCR] 中間データ出力は0または1を指定してください。")
-
-    print(f"入力PDF : {pdf_path}")
-    print(f"INI     : {ini_path}")
-    print(f"裁判所  : {', '.join(court_patterns)}")
-    print(f"公告    : {', '.join(announcement_patterns)}")
-    print(f"段組数  : {columns}")
-    print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")
-    print(f"OCR方式 : {ocr}")
-    print(f"中間データ出力: {intermediate_output}")
-    print(f"氏名    : {name if name else '指定なし'}")
-    print(f"あいまい検索: {'ON' if fuzzy_enabled == 1 else 'OFF'}")
-    print(f"あいまい検索一致率: {fuzzy_threshold}%")
-    print(f"エッジ強調: {edge_level}")
-
-    # 全ページを確認し、横向きページ（縦段組み）のみOCRする。
-    # 官報では、横向きページを縦段組み、縦向きページを横段組みとして扱う。
-    chunks = []
-    pending_ocr = []  # NDL OCR-Liteの一括処理用に画像とページ・段情報を保持する。
-    skipped_portrait_pages = 0
-    processed_landscape_pages = 0
-    # 解像度ごとの共通作業フォルダー
-    ocr_work_dir = pdf_path.parent / f".tmp{dpi}dpi"
-    image_base_dir = ocr_work_dir / "img"
-    image_work_dir = None  #PDF専用フォルダーは最初の対象ページで作成する。
-    with pdfium.PdfDocument(str(pdf_path)) as document:
-        total_pages = len(document)
-
-        # -pの指定を、実際に処理するページ番号の集合に変換する。
-        selected_pages = parse_page_ranges(page_spec, total_pages)
-        print(
-            f"処理対象ページ: "
-            f"{', '.join(map(str, sorted(selected_pages)))}"
-        )
-
-        for page_no in range(1, total_pages + 1):
-            # 処理対象ページでなければスキップする。
-            if page_no not in selected_pages:
-                continue
-
-            page = document[page_no - 1]  # pypdfium2のページ番号は0始まり
-            try:  # ページリソースを確実に解放
-                # pypdfium2のget_rotation()は角度(90/270)ではなく、
-                # 90度単位の値(0/1/2/3)を返すため、1または3で幅・高さを入れ替える。
-                page_width, page_height = page.get_size()
-                rotation = page.get_rotation()
-                if rotation in (1, 3):
-                    page_width, page_height = page_height, page_width
-
-                if page_width <= page_height:
-                    skipped_portrait_pages += 1
-                    print(
-                        f"ページ {page_no}: 縦向き "
-                        f"({page_width:.1f} x {page_height:.1f}) のため除外 "
-                    )
-                    continue
-
-                processed_landscape_pages += 1
-
-                # PDFiumでページ全体を指定DPIで描画する。
-                # PDFに設定されたページ回転はrender()側で反映される。
-                # Pillow画像に変換してRGBに統一する。
-                full_image = page.render(scale=dpi / 72.0).to_pil().convert("RGB")
-                pixel_width, pixel_height = full_image.size
-            finally:
-                page.close()
-
-            # PDF専用の画像フォルダーを1回だけ作成する。
-            if image_work_dir is None:
-                ocr_work_dir.mkdir(parents=True, exist_ok=True)
-                image_base_dir.mkdir(parents=True, exist_ok=True)
-                image_work_dir = Path(tempfile.mkdtemp(
-                    prefix=f"{pdf_path.stem}_",
-                    dir=image_base_dir,
-                ))
-
-            # 固定割合で余白を除外せず、画像内の長い縦罫線から本文左右端を検出する。
-            # 右側の余白境界と、左側の日付・官報名・号数欄との境界を線の位置で判定する。
-            content_left, content_right = detect_body_horizontal_bounds(full_image, columns)
-            content_width = content_right - content_left
-            if content_width <= 0:
-                raise ValueError(f"ページ {page_no}: 本文領域の幅が不正です。")
-
-            for column_no in range(columns):
-                # 左の欄・右余白を除外した本文領域を段数で分割する。
-                # 端数は各境界を個別に丸め、隙間や重複を避ける。
-                left = content_left + round(column_no * content_width / columns)
-                right = content_left + round((column_no + 1) * content_width / columns)
-                column_image = full_image.crop((left, 0, right, pixel_height))
-                # OCR用画像の前処理（グレースケール・コントラスト調整・エッジ強調・エッジsetting）
-                column_image = preprocess_image(column_image, edge_level, edge_settings)
-
-                #画像名にも解像度・ページ・段番号を含め、作業フォルダーに保存する。
-                image_path = image_work_dir / (
-                    f"{pdf_path.stem}_{dpi}dpi_p{page_no:04d}_c{column_no + 1}.png"
-                )
-                column_image.save(str(image_path))
-
-                if ocr == "tesseract":  # Tesseractは従来どおり画像ごとにOCRする。
-                    try:
-                        ocr_text = run_tesseract(tesseract, image_path, language, psm)
-                        text = normalize_text(ocr_text)
-                    finally:
-                        if intermediate_output == 0:
-                            try:
-                                image_path.unlink()
-                            except OSError:
-                                pass
-                    if text:
-                        chunks.append(
-                            {"page": page_no, "column": column_no + 1, "text": text}
-                        )
-                else:  # NDL OCR-Liteは全画像作成後にフォルダー単位で一括実行する。
-                    pending_ocr.append(
-                        {
-                            "image_path": image_path,
-                            "page": page_no,
-                            "column": column_no + 1,
-                        }
-                    )
-
-    # NDL OCR-Liteは全ページ・全段の画像作成が終わってから一度だけ起動する。
-    if ocr == "ndlocr-lite" and pending_ocr:
-        image_paths = [item["image_path"] for item in pending_ocr]
-        ocr_results = run_ndlocr_lite_batch(
-            ndlocr_lite,
-            image_work_dir,
-            ocr_work_dir,
-            image_paths,
-            viz=(intermediate_output == 1),
-            device=device,
-        )
-        for item, ocr_text in zip(pending_ocr, ocr_results):
-            text = normalize_text(ocr_text)
-            if text:
-                chunks.append(
-                    {
-                        "page": item["page"],
-                        "column": item["column"],
-                        "text": text,
-                    }
-                )
-
-    print(
-        f"ページ向き判定: 横向き {processed_landscape_pages} ページを処理、"
-        f"縦向き {skipped_portrait_pages} ページを除外"
-    )
-
-    start_time = time.perf_counter()
-    # 各段の境界を保持しつつ、OCR文字列を1本の連続ストリームにする。
-    # 公告が段やページをまたいでも途中で切らず、次の公告まで保持する。
-    stream_parts = []
-    positions = []
-    cursor = 0
-
-    for chunk in chunks:
-        marker = f"\n\n[PAGE={chunk['page']},COLUMN={chunk['column']}]\n"
-        start = cursor + len(marker)
-        stream_parts.append(marker)
-        stream_parts.append(chunk["text"])
-        end = start + len(chunk["text"])
-        positions.append((start, end, chunk["page"], chunk["column"]))
-        cursor = end
-
-    stream = "".join(stream_parts)
-    print(f"stream作成: {time.perf_counter() - start_time:.2f}秒", flush=True)
-    start_time = time.perf_counter()
-
-    # 中間OCRデータを、入力PDFと同じフォルダーに保存する。
-    # ページ・段番号を残すため、検索処理とは独立した確認用データとする。
-    if intermediate_output == 1:
-        with open(ocr_output_path, "w", encoding=output_encoding) as fp:
-            fp.write(f"入力PDF: {pdf_path}\n")
-            fp.write("=" * 80 + "\n\n")
-            for chunk in chunks:
-                fp.write(f"[ページ={chunk['page']}, 段={chunk['column']}]\n")
-                fp.write(chunk["text"])
-                fp.write("\n\n")
-        print(f"中間OCR TXT: {ocr_output_path}")
-
-    # 中間OCRデータの集約保存後に、作業用ファイルを削除する。
-    # 中間データ出力=1の場合は、個別の中間ファイルも残す。
-    if intermediate_output == 0:
-        if ocr_work_dir.exists():
-            # NDL OCR-Liteの個別TXT・JSON・XMLなどを削除する。
-            for temp_path in ocr_work_dir.iterdir():
-                if temp_path.is_file() and (
-                    temp_path.suffix.lower() in (".txt", ".png", ".json", ".xml")
-                    and temp_path.name.startswith(f"{pdf_path.stem}_{dpi}dpi_")
-                ):
-                    try:
-                        temp_path.unlink()
-                    except OSError as e:
-                        print(f"警告: 一時ファイルを削除できません: {temp_path}: {e}")
-
-            # 実際に作成したPDF専用画像フォルダーを削除する。
-            # mkdtemp()で作成したランダムなフォルダー名をそのまま使用する。
-            if image_work_dir is not None and image_work_dir.exists():
-                for image_path in image_work_dir.glob("*.png"):
-                    try:
-                        image_path.unlink()
-                    except OSError as e:
-                        print(f"警告: OCR画像を削除できません: {image_path}: {e}")
-
-                try:
-                    image_work_dir.rmdir()
-                except OSError:
-                    pass
-
-            # imgフォルダーは空の場合だけ削除する。
-            if image_base_dir.exists():
-                try:
-                    image_base_dir.rmdir()
-                except OSError:
-                    pass
-
-            # 作業フォルダーは空の場合だけ削除する。
-            try:
-                ocr_work_dir.rmdir()
-            except OSError:
-                pass
-
-    print(f"中間データ処理: {time.perf_counter() - start_time:.2f}秒", flush=True)
-    start_time = time.perf_counter()
-
-    # 「次の公告開始」までを現在の公告として保持する。
-    raw_records = split_announcements(stream, fuzzy_enabled == 1, fuzzy_threshold)
-    print(
-        f"公告分割: {time.perf_counter() - start_time:.2f}秒"
-        f"（{len(raw_records)}件）",
-        flush=True,
-    )
-    start_time = time.perf_counter()
-
-    matches = []
-    for announcement, body, start_pos, end_pos in raw_records:
-        # ANNOUNCEMENT_HEADINGSは「公告の境界」だけを判定する。
-        # 実際に抽出する公告はINIの[官報]公告との完全一致で決定する。
-        if not announcement_matches_target(announcement, announcement_patterns, fuzzy_enabled == 1, fuzzy_threshold):
-            continue
-
-        matched, court = court_matches(body, court_patterns)
-        if not matched:
-            continue
-
-        # 氏名は公告全体を対象に検索する。
-        if name and name not in body:
-            continue
-
-        first_page = ""
-        first_column = ""
-        for start, end, page_no, column_no in positions:
-            if start <= start_pos < end:
-                first_page = page_no
-                first_column = column_no
-                break
-
-        last_page = ""
-        last_column = ""
-        for start, end, page_no, column_no in positions:
-            if start < end_pos <= end or (start_pos < end and end_pos >= end):
-                last_page = page_no
-                last_column = column_no
-                break
-
-        matches.append(
-            {
-                "announcement": announcement,
-                "page": first_page,
-                "column": first_column,
-                "end_page": last_page,
-                "end_column": last_column,
-                "court": court,
-                "text": body,
-            }
-        )
-    print(f"公告検索: {time.perf_counter() - start_time:.2f}秒", flush=True)
-
-    with open(output_path, "w", encoding=output_encoding) as fp:
-        fp.write("検索結果\n")
-        fp.write(f"スクリプト版数: {__version_short__.split(',')[0]}\n")
-        fp.write(f"Python版数: {platform.python_version()} ({platform.architecture()[0]})\n")
-        fp.write("ライブラリ版数:\n")
-        fp.write(f"  pypdfium2: {get_package_version('pypdfium2')}\n")
-        fp.write(f"  Pillow: {get_package_version('Pillow')}\n")
-        fp.write(f"  ini_cfg_parser: {get_package_version('ini_cfg_parser')}\n")
-        fp.write(f"OCRエンジン: {ocr} {get_ocr_version(ocr, ocr_executable)}\n")
-        fp.write(f"解像度: {dpi} DPI\n")
-        fp.write(f"エッジ強調: {edge_level}\n")
-        fp.write("=" * 80 + "\n")
-        fp.write(f"入力PDF: {pdf_path}\n")
-        fp.write(f"裁判所: {', '.join(court_patterns)}\n")
-        fp.write(f"氏名: {name if name else '指定なし'}\n")
-        fp.write(f"該当件数: {len(matches)}\n")
-        fp.write("=" * 80 + "\n\n")
-
-        for index, item in enumerate(matches, start=1):
-            fp.write(f"[{index}]\n")
-            fp.write(f"公告: {item['announcement']}\n")
-            fp.write(f"開始ページ: {item['page']}\n")
-            fp.write(f"開始段: {item['column']}\n")
-            fp.write(f"終了ページ: {item['end_page']}\n")
-            fp.write(f"終了段: {item['end_column']}\n")
-            fp.write(f"裁判所: {item['court']}\n")
-            fp.write("-" * 80 + "\n")
-            fp.write(item["text"])
-            fp.write("\n\n")
-
-    print(f"出力TXT : {output_path}")
-    print(f"該当件数: {len(matches)}")
-    return OK_VAL
-
-def parse_page_ranges(page_spec, total_pages):
-    """ページ指定文字列を処理対象ページ番号の集合に変換する。"""
-
-    # -pを指定しなかった場合は、全ページを処理対象にする。
-    if not page_spec:
-        return set(range(1, total_pages + 1))
-
-    pages = set()
-
-    for part in page_spec.split(","):
-        part = part.strip()
-
-        if not part:
-            continue
-
-        # 1個のページ番号
-        if "-" not in part:
-            page = int(part)
-
-            if page < 1 or page > total_pages:
-                raise ValueError(
-                    f"ページ番号が範囲外です: {part}"
-                )
-
-            pages.add(page)
-            continue
-
-        start, end = part.split("-", 1)
-        start = start.strip()
-        end = end.strip()
-
-        # 7-10 → 7～10ページ
-        if start and end:
-            start_page = int(start)
-            end_page = int(end)
-
-            if start_page < 1 or end_page < 1:
-                raise ValueError(
-                    f"ページ番号は1以上を指定してください: {part}"
-                )
-
-            if start_page > end_page:
-                raise ValueError(
-                    f"ページ範囲が不正です: {part}"
-                )
-
-            if end_page > total_pages:
-                raise ValueError(
-                    f"ページ番号がPDFのページ数を超えています: {part}"
-                )
-
-            pages.update(range(start_page, end_page + 1))
-
-        # 7- → 7ページ以降
-        elif start:
-            start_page = int(start)
-
-            if start_page < 1 or start_page > total_pages:
-                raise ValueError(
-                    f"ページ番号が範囲外です: {part}"
-                )
-
-            pages.update(range(start_page, total_pages + 1))
-
-        # -10 → 1～10ページ
-        else:
-            end_page = int(end)
-
-            if end_page < 1 or end_page > total_pages:
-                raise ValueError(
-                    f"ページ番号が範囲外です: {part}"
-                )
-
-            pages.update(range(1, end_page + 1))
-
-    return pages
-
-def is_page_selected(page_no, page_spec, total_pages):
-    """指定されたページが処理対象か判定する。"""
-    if not page_spec:
-        return True
-
-    for part in page_spec.split(","):
-        part = part.strip()
-
-        if not part:
-            continue
-
-        if "-" not in part:
-            if page_no == int(part):
-                return True
-            continue
-
-        start, end = part.split("-", 1)
-        start = start.strip()
-        end = end.strip()
-
-        if start and end:
-            if int(start) <= page_no <= int(end):
-                return True
-
-        elif start:
-            # 10- → 10ページ以降
-            if page_no >= int(start):
-                return True
-
-        else:
-            # -10 → 1～10ページ
-            if page_no <= int(end):
-                return True
-
-    return False
-
-def fuzzy_heading_match(text, heading, threshold_percent=90):
-    """OCR誤認識を許容し、見出しの類似度で判定する。"""
-    text = normalize_heading(text)
-    heading = normalize_heading(heading)
-
-    if not text or not heading:
-        return False
-
-    # 文字数の差が大きい場合は誤一致を避ける
-    max_length_diff = max(2, int(len(heading) * 0.05))
-    if abs(len(text) - len(heading)) > max_length_diff:
-        return False
-
-    # INIのパーセント値を使って類似度を判定
-    similarity = SequenceMatcher(None, text, heading).ratio() * 100
-    return similarity >= threshold_percent
-
-def preprocess_image(image: Image.Image, level: int = 1, settings: dict = None,) -> Image.Image:
-    """OCR用の画像前処理"""
-
-    # 整数型と範囲を確認
-    if type(level) is not int or level not in (0, 1, 2, 3):
-        raise ValueError("エッジ強調レベルは0～3を指定してください。")
-
-    #レベル0は画像加工を行わず、そのまま返す
-    if level == 0:
-        return image
-
-    if settings is None:
-        raise ValueError("画像加工の設定(settings)が指定されていません。")
-
-    if not isinstance(settings, dict) or level not in settings:
-        raise ValueError(f"エッジ強調レベル{level}の設定がありません。")
-
-    params = settings[level]
-
-    if not isinstance(params, (list, tuple)) or len(params) != 3:
-        raise ValueError(
-            f"エッジ強調レベル{level}の設定には3個のパラメータを指定してください。"
-        )
-
-    # 数値型と有限値を確認
-    if not all(type(v) in (int, float) and math.isfinite(v) for v in params):
-        raise ValueError(f"エッジ強調レベル{level}の設定には有限の数値を指定してください。")
-
-    radius = float(params[0])
-    if not 0.1 <= radius <= 10.0:
-        raise ValueError("radiusは0.1～10.0を指定してください。")
-
-    # 整数として扱える値か確認
-    if not params[1].is_integer() if isinstance(params[1], float) else False:
-        raise ValueError("percentには整数を指定してください。")
-
-    percent = int(params[1])
-    if not 0 <= percent <= 500:
-        raise ValueError("percentは0～500を指定してください。")
-
-    if not params[2].is_integer() if isinstance(params[2], float) else False:
-        raise ValueError("thresholdには整数を指定してください。")
-
-    threshold = int(params[2])
-    if not 0 <= threshold <= 255:
-        raise ValueError("thresholdは0～255を指定してください。")
-
-    # グレースケール化
-    image = image.convert("L")
-
-    # コントラスト調整
-    image = ImageOps.autocontrast(image)
-
-    # UnsharpMask   輪郭を強調する強さなどを数値で指定
-    # radius, percent, threshold
-    # パラメータ    意味                        調整の考え方
-    # radius        強調する輪郭の範囲          大きくすると広い範囲に作用
-    # percent       強調する強さ（%）           大きくすると強調が強くなる
-    # threshold     強調対象とする明るさの差    大きくすると小さな変化やノイズを強調しにくい
-
-    # エッジ強調
-    image = image.filter(
-        ImageFilter.UnsharpMask(
-            radius=radius,
-            percent=percent,
-            threshold=threshold
-        )
-    )
-
-    return image
-
-
-def get_ocr_version(ocr, ocr_executable):
-    """使用するOCRエンジンのバージョンを取得する。"""
-    try:
-        if ocr == "tesseract":
-            # Tesseractは実行ファイルの--versionから取得
-            exe_path = find_tesseract(ocr_executable)
-            result = subprocess.run(
-                [str(exe_path), "--version"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-            )
-
-            output = result.stdout.strip() or result.stderr.strip()
-
-            if result.returncode == 0 and output:
-                version = output.splitlines()[0].strip()
-                prefix = "tesseract "
-                if version.lower().startswith(prefix):
-                    version = version[len(prefix):]
-                return version
-
-        elif ocr == "ndlocr-lite":
-            # NDL OCR-Liteはuv tool listから取得
-            result = subprocess.run(
-                ["uv", "tool", "list"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-            )
-
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    line = line.strip()
-                    if line.startswith("ndlocr-lite v"):
-                        return line.split(" v", 1)[1].strip()
-
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-    return "取得失敗"
-
 
 if __name__ == "__main__":
     sys.exit(main())
