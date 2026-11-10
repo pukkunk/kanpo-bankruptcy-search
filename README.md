@@ -24,7 +24,7 @@
 ## 動作環境
 
 - Windows
-- Python 3.8以降を想定
+- Python 3.11以降を想定
 - pypdfium2（PDFの読み込み・画像化）
 - Pillow（画像処理）
 - ini_cfg_parser
@@ -37,26 +37,54 @@
 
 ``` text
 kanpo-bankruptcy-search/
-├── kanpo_search.py
 ├── kanpo_search.ini
-└── README.md
+├── kanpo_search.py
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+└── uv.lock
 ```
 
-`kanpo_search.py` は検索スクリプトです。
+| ファイル名 | 説明 |
+|---|---|
+| `kanpo_search.ini` | アプリケーションの設定ファイル |
+| `kanpo_search.py` | メインプログラム |
+| `pyproject.toml` | プロジェクト情報・依存パッケージの定義 |
+| `README.md` | 使用方法・インストール手順の説明 |
+| `requirements.txt` | pip用の依存パッケージ一覧 |
+| `uv.lock` | uv用の依存パッケージ固定情報 |
 
 `kanpo_search.ini` は検索条件やOCRの設定ファイルです。スクリプト実行時にINIファイルが存在しない場合は、既定の設定で作成されます。`-c` オプションで指定したINIファイルが存在しない場合はエラーになります。
 
 ## インストール
 
-### 1. Pythonパッケージのインストール
+以下の **1 または 2 のいずれか一方** の方法でインストールしてください。
 
-コマンドプロンプトで、次のコマンドを実行します。
+### 1. uvによるインストール（推奨）
 
-``` cmd
-python -m pip install pypdfium2 pillow ini_cfg_parser
+[uv](https://docs.astral.sh/uv/) がインストールされていることを確認し、プロジェクトのルートディレクトリで次のコマンドを実行します。
+
+```cmd
+uv tool install .
 ```
 
-### 2. OCRエンジンを選択して導入
+### 2. 通常インストール（pip）
+
+uvを使用しない場合は、プロジェクトのルートディレクトリで次のコマンドを実行します。
+
+```cmd
+python -m pip install -r requirements.txt
+```
+
+requirements.txt の内容：
+
+```text
+pypdfium2
+ini_cfg_parser
+Pillow
+```
+
+### 3. OCRエンジンを選択して導入
 
 このスクリプトでは、INIファイルの `[OCR]` セクションにある `ocr` の設定で、使用するOCRエンジンを切り替えられます。
 
@@ -131,7 +159,7 @@ NDL OCR-Liteを使用する場合、Tesseract-OCRの `実行ファイル`、`言
 
 NDL OCR-Liteの実行デバイスには `cpu` または `cuda` を指定できます。CUDAを使用する場合は、CUDAに対応した実行環境が必要です。
 
-### 3. INIファイルの設定
+### 4. INIファイルの設定
 
 `kanpo_search.ini` の `[OCR]` セクションで、使用するOCRエンジンを指定してください。
 
