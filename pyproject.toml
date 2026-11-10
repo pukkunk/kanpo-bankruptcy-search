@@ -1,0 +1,24 @@
+[project]
+name = "kanpo-search"
+version = "0.0.7"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "pukkunk", email = "pukkunk@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "ini-cfg-parser>=0.1.11",
+    "pillow>=13.0.0",
+    "pypdfium2>=5.15.2",
+]
+
+[project.scripts]
+kanpo_search = "kanpo_search:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["kanpo_search"]

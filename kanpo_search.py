@@ -46,20 +46,19 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.6, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.7, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
 
-if getattr(sys, "frozen", False):
-    # PyInstallerでEXE化した場合
-    SCR_PATH = Path(sys.executable).resolve()
-else:
-    # Pythonスクリプトとして実行した場合
-    SCR_PATH = Path(__file__).resolve()
-DEFAULT_INI = SCR_PATH.with_suffix(".ini")
+# スクリプトのパス
+SCR_PATH = Path(__file__).resolve()
+
+# 実行時のカレントフォルダ
+BASE_FOLDER = Path.cwd()
 
 def main(args=None) -> None:
+    DEFAULT_INI = get_inifile()
     all_start_time = time.perf_counter()
     parser = argparse.ArgumentParser(
         prog=SCR_PATH.name,
@@ -1347,6 +1346,16 @@ def get_ocr_version(ocr, ocr_executable):
 
     return "取得失敗"
 
+
+def get_inifile() -> Path:
+    """INIファイルのパスを取得する。"""
+
+    # スクリプト名からINIファイル名を生成
+    base_name = SCR_PATH.stem
+    ini_name = base_name + ".ini"
+
+    # INIファイルはカレントフォルダに配置
+    return BASE_FOLDER / ini_name
 
 # 情報元
 # 官報情報サービス"掲載項目名一覧"
