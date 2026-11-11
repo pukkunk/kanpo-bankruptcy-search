@@ -62,7 +62,29 @@ kanpo-bankruptcy-search/
 
 ### 1. uvによるインストール（推奨）
 
-[uv](https://docs.astral.sh/uv/) がインストールされていることを確認し、プロジェクトのルートディレクトリで次のコマンドを実行します。
+#### uvのインストール
+
+uvは、Pythonのパッケージや実行環境を管理するツールです。
+
+uvをまだインストールしていない場合は、WindowsのコマンドプロンプトまたはPowerShellで、以下のコマンドを実行してください。
+
+```cmd
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+インストール後、コマンドプロンプトを再起動し、以下のコマンドでインストールを確認します。
+
+```cmd
+uv --version
+```
+
+その他のOSやインストール方法については、[uv公式インストールガイド](https://docs.astral.sh/uv/getting-started/installation/)を参照してください。
+
+#### プログラムのインストール
+
+[uv tool install](https://docs.astral.sh/uv/concepts/tools/) を使用すると、専用のPython環境にプログラムと依存ライブラリがインストールされ、コマンドとして実行できるようになります。
+
+プロジェクトのルートディレクトリで次のコマンドを実行します。
 
 ```cmd
 uv tool install .
