@@ -77,7 +77,7 @@ GitHubからプログラムのソースをダウンロードします。以下�
 Gitがインストールされている場合は、コマンドプロンプトまたはPowerShellで以下のコマンドを実行します。
 
 ```cmd
-git clone https://github.com/pukkunk/プロジェクト名.git
+git clone https://github.com/pukkunk/kanpo-bankruptcy-search.git
 ```
 
 ダウンロードしたプロジェクトのフォルダに移動します。
