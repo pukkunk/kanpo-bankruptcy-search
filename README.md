@@ -31,11 +31,11 @@
 - Tesseract-OCR（Tesseractを使用する場合）
 - Tesseract-OCRの日本語言語データ `jpn`（Tesseractを使用する場合）
 - NDL OCR-Lite（NDL OCR-Liteを使用する場合）
-- [uv](https://github.com/astral-sh/uv)（NDL OCR-Liteをuvで導入する場合）
+- [uv](https://github.com/astral-sh/uv)（uvでインストールする場合）
 
 ## ファイル構成
 
-``` text
+```text
 kanpo-bankruptcy-search/
 ├── kanpo_search.ini
 ├── kanpo_search.py
@@ -58,13 +58,45 @@ kanpo-bankruptcy-search/
 
 ## インストール
 
-以下の **1 または 2 のいずれか一方** の方法でインストールしてください。
+以下の手順でプログラムを準備し、インストールしてください。
 
-### 1. uvによるインストール（推奨）
+### 1. プログラムのソースを準備する
 
-#### uvのインストール
+GitHubからプログラムのソースをダウンロードします。以下のいずれかの方法で準備してください。
+
+#### 方法1. GitHubからZIPファイルをダウンロードする（Git不要）
+
+1. GitHubのプロジェクトページを開きます。
+2. 緑色の **Code** ボタンをクリックします。
+3. **Download ZIP** を選択してダウンロードします。
+4. ダウンロードしたZIPファイルを任意のフォルダに展開します。
+5. 展開したフォルダに移動します。
+
+#### 方法2. git cloneを使用する
+
+Gitがインストールされている場合は、コマンドプロンプトまたはPowerShellで以下のコマンドを実行します。
+
+```cmd
+git clone https://github.com/pukkunk/プロジェクト名.git
+```
+
+ダウンロードしたプロジェクトのフォルダに移動します。
+
+```cmd
+cd プロジェクト名
+```
+
+以降のインストール作業は、プロジェクトのルートディレクトリ（`pyproject.toml` があるフォルダ）で実行してください。
+
+### 2. プログラムのインストール
+
+以下の **2.1 または 2.2 のいずれか一方** の方法でインストールしてください。
+
+#### 2.1 uvによるインストール（推奨）
 
 uvは、Pythonのパッケージや実行環境を管理するツールです。
+
+##### uvのインストール
 
 uvをまだインストールしていない場合は、WindowsのコマンドプロンプトまたはPowerShellで、以下のコマンドを実行してください。
 
@@ -80,19 +112,21 @@ uv --version
 
 その他のOSやインストール方法については、[uv公式インストールガイド](https://docs.astral.sh/uv/getting-started/installation/)を参照してください。
 
-#### プログラムのインストール
+##### プログラムのインストール
 
 [uv tool install](https://docs.astral.sh/uv/concepts/tools/) を使用すると、専用のPython環境にプログラムと依存ライブラリがインストールされ、コマンドとして実行できるようになります。
 
-プロジェクトのルートディレクトリで次のコマンドを実行します。
+プロジェクトのルートディレクトリ（`pyproject.toml` があるフォルダ）で、次のコマンドを実行します。
 
 ```cmd
 uv tool install .
 ```
 
-### 2. 通常インストール（pip）
+#### 2.2 通常インストール（pip）
 
-uvを使用しない場合は、プロジェクトのルートディレクトリで次のコマンドを実行します。
+uvを使用しない場合は、Pythonに付属するpipを使用して依存パッケージをインストールします。
+
+プロジェクトのルートディレクトリで、次のコマンドを実行してください。
 
 ```cmd
 python -m pip install -r requirements.txt
@@ -105,6 +139,8 @@ pypdfium2
 ini_cfg_parser
 Pillow
 ```
+
+pipでインストールした場合は、スクリプトをPythonから直接実行します。
 
 ### 3. OCRエンジンを選択して導入
 
@@ -121,7 +157,7 @@ Tesseract-OCRをインストールしてください。
 
 Windowsで標準的なインストール先を使用している場合、実行ファイルは次の場所にあります。
 
-``` text
+```text
 C:\Program Files\Tesseract-OCR\tesseract.exe
 ```
 
@@ -131,7 +167,7 @@ C:\Program Files\Tesseract-OCR\tesseract.exe
 
 コマンドプロンプトで、次のコマンドを実行して日本語言語データが利用可能か確認できます。
 
-``` cmd
+```cmd
 "C:\Program Files\Tesseract-OCR\tesseract.exe" --list-langs
 ```
 
@@ -139,7 +175,7 @@ C:\Program Files\Tesseract-OCR\tesseract.exe
 
 確認例：
 
-``` text
+```text
 eng
 jpn
 osd
@@ -147,7 +183,7 @@ osd
 
 INIファイルでは、次のように指定します。
 
-``` ini
+```ini
 [OCR]
 ocr=tesseract
 実行ファイル=
@@ -155,23 +191,43 @@ ocr=tesseract
 PSM=6
 ```
 
-#### B. NDL OCR-Liteを使用する場合（uvを使用）
+B. NDL OCR-Liteを使用する場合
 
-[uv](https://github.com/astral-sh/uv) を使用できる環境では、次の手順でNDL OCR-Liteを導入できます。導入後は、`ndlocr-lite` コマンドから実行できます。
+NDL OCR-Liteは、公式リポジトリから取得してインストールします。
 
-まず、NDL OCR-Liteのリポジトリを取得し、uvでツールとしてインストールします。
+以下のいずれかの方法でソースを取得してください。
 
-``` bash
+#### 方法1. GitHubからZIPファイルをダウンロードする（Git不要）
+1. NDL OCR-Liteの公式リポジトリを開きます。
+2. 緑色の Code ボタンをクリックします。
+3. Download ZIP を選択してダウンロードします。
+4. ダウンロードしたZIPファイルを任意のフォルダに展開します。
+5. 展開したフォルダに移動します。
+
+#### 方法2. git cloneを使用する
+
+Gitがインストールされている場合は、コマンドプロンプトまたはPowerShellで以下のコマンドを実行します。
+
+```cmd
 git clone https://github.com/ndl-lab/ndlocr-lite
 cd ndlocr-lite
+```
+
+NDL OCR-Liteのインストール
+
+ソースを取得して展開したフォルダ、またはgit cloneで取得した ndlocr-lite フォルダに移動し、次のコマンドを実行します。
+
+```cmd
 uv tool install .
 ```
 
-インストール後、`ndlocr-lite` コマンドを実行できることを確認してください。コマンドが見つからない場合は、uvのツール実行ファイルの保存先がPATHに含まれているか確認してください。
+インストール後は、`ndlocr-lite` コマンドから実行できます。
+
+コマンドが見つからない場合は、uvのツール実行ファイルの保存先がPATHに含まれているか確認してください。
 
 INIファイルでは、次のように指定します。
 
-``` ini
+```ini
 [OCR]
 ocr=ndlocr-lite
 device=cpu
@@ -187,7 +243,7 @@ NDL OCR-Liteの実行デバイスには `cpu` または `cuda` を指定でき�
 
 設定例（Tesseract-OCR）：
 
-``` ini
+```ini
 [OCR]
 ocr=tesseract
 実行ファイル=
@@ -203,7 +259,7 @@ edge3=3.0,200,0
 
 設定例（NDL OCR-Lite）：
 
-``` ini
+```ini
 [OCR]
 ocr=ndlocr-lite
 実行ファイル=
@@ -226,7 +282,7 @@ edge3=3.0,200,0
 
 設定ファイルの例：
 
-``` ini
+```ini
 ; 官報検索設定
 ; 日本語UTF-8で保存してください。
 
@@ -363,7 +419,7 @@ OCR処理の前に画像を加工し、文字の輪郭を強調するための�
 
 コマンドプロンプトで、スクリプトと入力PDFのパスを指定して実行します。
 
-``` cmd
+```cmd
 python kanpo_search.py "C:\官報\官報PDF.pdf"
 ```
 
@@ -371,7 +427,7 @@ python kanpo_search.py "C:\官報\官報PDF.pdf"
 
 複数のPDFを処理する場合は、入力ファイルのパスをスペース区切りで複数指定します。パスに空白や日本語が含まれる場合は、それぞれをダブルクォーテーションで囲んでください。
 
-``` cmd
+```cmd
 python kanpo_search.py "C:\官報\官報PDF_1.pdf" "C:\官報\官報PDF_2.pdf" "C:\官報\官報PDF_3.pdf"
 ```
 
@@ -381,7 +437,7 @@ python kanpo_search.py "C:\官報\官報PDF_1.pdf" "C:\官報\官報PDF_2.pdf" "
 
 `-n` または `--name` オプションで氏名を指定できます。指定した場合は、裁判所の条件に加えて氏名でも絞り込みます。
 
-``` cmd
+```cmd
 python kanpo_search.py "C:\官報\官報PDF.pdf" -n "山田太郎"
 ```
 
@@ -391,7 +447,7 @@ python kanpo_search.py "C:\官報\官報PDF.pdf" -n "山田太郎"
 
 `-c` または `--config` オプションでINIファイルを指定できます。
 
-``` cmd
+```cmd
 python kanpo_search.py "C:\官報\官報PDF.pdf" -c "C:\設定\kanpo_search.ini"
 ```
 
@@ -399,13 +455,13 @@ python kanpo_search.py "C:\官報\官報PDF.pdf" -c "C:\設定\kanpo_search.ini"
 
 ### 4. ヘルプの表示
 
-``` cmd
+```cmd
 python kanpo_search.py --help
 ```
 
 バージョンを確認するには、次のコマンドを実行します。
 
-``` cmd
+```cmd
 python kanpo_search.py --version
 ```
 
@@ -421,7 +477,7 @@ python kanpo_search.py --version
 
 以下は、検索結果の形式を説明するための架空データによる出力例です。実在する個人、法人、住所、事件番号等を示すものではありません。
 
-``` text
+```text
 検索結果
 入力PDF: D:\data\kanpo_search\20260901h01780full00010032.pdf
 裁判所: *地方裁判所*
@@ -483,13 +539,13 @@ python kanpo_search.py --version
 
 INIファイルの `[OCR]` セクションにある `中間データ出力` で、中間データの出力を切り替えます。
 
-``` ini
+```ini
 中間データ出力=0
 ```
 
 中間データを出力しない設定です。
 
-``` ini
+```ini
 中間データ出力=1
 ```
 
