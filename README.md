@@ -83,7 +83,7 @@ git clone https://github.com/pukkunk/kanpo-bankruptcy-search.git
 ダウンロードしたプロジェクトのフォルダに移動します。
 
 ```cmd
-cd プロジェクト名
+cd kanpo-bankruptcy-search
 ```
 
 以降のインストール作業は、プロジェクトのルートディレクトリ（`pyproject.toml` があるフォルダ）で実行してください。
