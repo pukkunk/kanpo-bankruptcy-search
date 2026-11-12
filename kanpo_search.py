@@ -736,7 +736,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     court_patterns = split_patterns(ini_parser.get("官報", "裁判所"))
     announcement_patterns = split_patterns(ini_parser.get("官報", "公告"))
     columns = ini_parser.get("官報", "段組数")
-    tesseract_path = ini_parser.get("OCR", "実行ファイル")
+    ocr_executable = ini_parser.get("OCR", "実行ファイル")
     language = ini_parser.get("OCR", "言語")
     psm = ini_parser.get("OCR", "PSM")
     dpi = ini_parser.get("OCR", "解像度")
@@ -763,11 +763,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     if not 0 <= fuzzy_threshold <= 100:
         raise ValueError("[官報] あいまい検索一致率は0～100を指定してください。")
 
-    if edge_level not in (0, 1, 2, 3):
-        raise ValueError("[OCR] エッジ強調は0～3を指定してください。")
-
     ocr = ini_parser.get("OCR", "ocr").strip().lower()
-    ocr_executable = ini_parser.get("OCR", "実行ファイル")
 
     if ocr not in ("tesseract", "ndlocr-lite"):
         raise ValueError(

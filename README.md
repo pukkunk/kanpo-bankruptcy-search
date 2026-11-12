@@ -161,7 +161,7 @@ Windowsで標準的なインストール先を使用している場合、実行�
 C:\Program Files\Tesseract-OCR\tesseract.exe
 ```
 
-スクリプトは、INIファイルで指定された実行ファイル、PATH上の実行ファイル、または標準的なWindowsのインストール先からTesseract-OCRを検索します。
+スクリプトは、INIファイルで指定された実行ファイル、PATH上の実行ファイル、または各OCRエンジンの標準的なインストール先から、選択されたOCRエンジン（Tesseract-OCRまたはNDL OCR-Lite）を検索します。
 
 必要に応じて、`kanpo_search.ini` の `[OCR]` セクションに実行ファイルのフルパスを設定してください。
 
@@ -312,7 +312,7 @@ ocr=ndlocr-lite
 ; Tesseract-OCRを使用する場合は無視される
 device=cpu
 
-; Tesseract-OCRの実行ファイル。空欄なら自動検索
+; 使用するOCRエンジンの実行ファイル。空欄ならPATHまたは標準的なWindowsインストール先を検索",
 実行ファイル=
 
 ; Tesseract-OCRで使用する言語
@@ -355,7 +355,7 @@ edge3=3.0,200,0
 |---|---|
 | ocr | 使用するOCRエンジン。`tesseract` または `ndlocr-lite` を指定します。 |
 | device | NDL OCR-Liteの実行デバイスです。`cpu` または `cuda` を指定します。Tesseract-OCRでは使用しません。 |
-| 実行ファイル | Tesseract-OCRの実行ファイルのパス。空欄の場合は自動検索します。NDL OCR-LiteではTesseract用の設定です。 |
+| 実行ファイル | 使用するOCRエンジン（TesseractまたはNDL OCR-Lite）の実行ファイルのパスを指定します。空欄の場合は自動検索します。
 | 言語 | Tesseract-OCRで使用する言語データ。日本語の場合は `jpn` です。NDL OCR-LiteではTesseract用の設定です。 |
 | PSM | Tesseract-OCRのページ分割モードです。NDL OCR-LiteではTesseract用の設定です。 |
 | 解像度 | PDFを画像化する際の解像度（DPI）です。 |
