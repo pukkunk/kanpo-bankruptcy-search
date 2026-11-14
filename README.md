@@ -423,12 +423,25 @@ OCR処理の前に画像を加工し、文字の輪郭を強調するための�
 python kanpo_search.py "C:\官報\官報PDF.pdf"
 ```
 
+uvでインストールしした場合
+
+```cmd
+kanpo_search "C:\官報\官報PDF.pdf"
+```
+
+
 入力PDFのパスは、実際に検索したいPDFのパスに置き換えてください。
 
 複数のPDFを処理する場合は、入力ファイルのパスをスペース区切りで複数指定します。パスに空白や日本語が含まれる場合は、それぞれをダブルクォーテーションで囲んでください。
 
 ```cmd
 python kanpo_search.py "C:\官報\官報PDF_1.pdf" "C:\官報\官報PDF_2.pdf" "C:\官報\官報PDF_3.pdf"
+```
+
+uvでインストールしした場合
+
+```cmd
+kanpo_search "C:\官報\官報PDF_1.pdf" "C:\官報\官報PDF_2.pdf" "C:\官報\官報PDF_3.pdf"
 ```
 
 指定したPDFは、コマンドに記載した順番に処理されます。各PDFの検索結果は、それぞれの入力PDFと同じフォルダーに出力されます。
@@ -441,6 +454,12 @@ python kanpo_search.py "C:\官報\官報PDF_1.pdf" "C:\官報\官報PDF_2.pdf" "
 python kanpo_search.py "C:\官報\官報PDF.pdf" -n "山田太郎"
 ```
 
+uvでインストールしした場合
+
+```cmd
+kanpo_search "C:\官報\官報PDF.pdf" -n "山田太郎"
+```
+
 氏名は検索対象の文字列に一致するかどうかで判定されます。OCRの読み取り誤りがある場合は、該当する公告が抽出されないことがあります。
 
 ### 3. 使用するINIファイルを指定
@@ -451,6 +470,12 @@ python kanpo_search.py "C:\官報\官報PDF.pdf" -n "山田太郎"
 python kanpo_search.py "C:\官報\官報PDF.pdf" -c "C:\設定\kanpo_search.ini"
 ```
 
+uvでインストールしした場合
+
+```cmd
+kanpo_search "C:\官報\官報PDF.pdf" -c "C:\設定\kanpo_search.ini"
+```
+
 指定したINIファイルが存在しない場合はエラーになります。
 
 ### 4. ヘルプの表示
@@ -459,12 +484,22 @@ python kanpo_search.py "C:\官報\官報PDF.pdf" -c "C:\設定\kanpo_search.ini"
 python kanpo_search.py --help
 ```
 
+uvでインストールしした場合
+
+```cmd
+kanpo_search --help
+```
 バージョンを確認するには、次のコマンドを実行します。
 
 ```cmd
 python kanpo_search.py --version
 ```
 
+uvでインストールしした場合
+
+```cmd
+kanpo_search --version
+```
 ## 検索結果
 
 検索結果は、入力PDFと同じフォルダーに、入力PDFのファイル名に解像度（DPI）を付加した `.txt` ファイルとして出力されます。
