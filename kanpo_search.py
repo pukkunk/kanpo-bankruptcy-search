@@ -46,7 +46,7 @@ except ImportError as e:
 OK_VAL = 0
 NG_VAL = 1
 
-__version_short__ = f"0.0.7, python={platform.python_version()} {platform.architecture()[0]}"
+__version_short__ = f"0.0.8, python={platform.python_version()} {platform.architecture()[0]}"
 __version__ = f"{__version_short__}\n"
 __copyright__ = "pukkunk"
 __author__ = "pukkunk"
@@ -164,6 +164,7 @@ def get_ini_dict_val() -> ini.IniDict:
             "言語": {"type": str, "inf": "jpn"},
             "PSM": {"type": int, "inf": 6},
             "解像度": {"type": int, "inf": 300},
+            "det_conf_threshold": {"type": float, "inf": 0.30},
             "エッジ強調": {"type": int, "inf": 0},
             "edge1": {"type": str, "inf": "1.0,100,0"},
             "edge2": {"type": str, "inf": "2.0,150,0"},
@@ -209,6 +210,8 @@ def create_default_ini(ini_path: Path) -> None:
         "; NDLOCR-Lite実行デバイス: cpu または cuda",
         "device=cpu",
         "解像度=300",
+        "; NDL OCR-Lite検出信頼度しきい値（初期値=0.25）",
+        "det_conf_threshold=0.30",
         "; エッジ強調: 0=無効、1=弱、2=標準、3=強",
         "エッジ強調=0",
         "; エッジ強調パラメータ: Radius, Percent, Threshold",
@@ -349,7 +352,7 @@ def find_ndlocr_lite(configured_path: str) -> str:
     )
 
 
-def run_ndlocr_lite_batch(ndlocr_lite, source_dir, output_dir, image_paths, viz=False, device="cpu"):
+def run_ndlocr_lite_batch(ndlocr_lite, source_dir, output_dir, image_paths, viz=False, device="cpu", det_conf_threshold=0.25):
     """画像フォルダー内のPNGをNDL OCR-Liteで一括OCRする。"""
     source_dir = Path(source_dir)
     output_dir = Path(output_dir)
@@ -368,6 +371,7 @@ def run_ndlocr_lite_batch(ndlocr_lite, source_dir, output_dir, image_paths, viz=
         "--sourcedir", str(source_dir),
         "--out", str(output_dir),
         "--device", device,
+        "--det-conf-threshold", str(det_conf_threshold),
     ]
     if viz:
         command.extend(["--viz", "True"])
@@ -552,7 +556,12 @@ def find_announcement_starts(stream, fuzzy_enabled=False, threshold_percent=90):
     starts = []
     offset = 0
 
+    skip_until_line = -1  # 複数行見出しで使用済みの行を記録
     for line_index, line in enumerate(lines):
+        if line_index <= skip_until_line:
+            offset += len(line)
+            continue
+
         line_text = line.strip()
         if not line_text:
             offset += len(line)
@@ -590,6 +599,7 @@ def find_announcement_starts(stream, fuzzy_enabled=False, threshold_percent=90):
                         break
 
                 if found:
+                    skip_until_line = next_index  # 見出しに使用した行をスキップ
                     break
 
                 if len(joined) > max_heading_length:
@@ -740,6 +750,9 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     language = ini_parser.get("OCR", "言語")
     psm = ini_parser.get("OCR", "PSM")
     dpi = ini_parser.get("OCR", "解像度")
+    det_conf_threshold = ini_parser.get("OCR", "det_conf_threshold")
+    if not math.isfinite(det_conf_threshold) or not 0.0 <= det_conf_threshold <= 1.0:
+        raise ValueError("[OCR] det_conf_thresholdは0.0～1.0を指定してください。")
     edge_level = ini_parser.get("OCR", "エッジ強調")
     edge_settings = {
         0: None,
@@ -792,6 +805,8 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
     print(f"OCR     : {tesseract if ocr == 'tesseract' else ndlocr_lite}")
     print(f"OCR方式 : {ocr}")
     print(f"中間データ出力: {intermediate_output}")
+    if ocr == "ndlocr-lite":
+        print(f"NDL OCR-Lite det-conf-threshold: {det_conf_threshold:.2f}")
     print(f"氏名    : {name if name else '指定なし'}")
     print(f"あいまい検索: {'ON' if fuzzy_enabled == 1 else 'OFF'}")
     print(f"あいまい検索一致率: {fuzzy_threshold}%")
@@ -913,6 +928,7 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
             image_paths,
             viz=(intermediate_output == 1),
             device=device,
+            det_conf_threshold=det_conf_threshold,
         )
         for item, ocr_text in zip(pending_ocr, ocr_results):
             text = normalize_text(ocr_text)
@@ -1070,6 +1086,8 @@ def process_pdf(pdf_path, ini_path, name, page_spec=None):
         fp.write(f"  ini_cfg_parser: {get_package_version('ini_cfg_parser')}\n")
         fp.write(f"OCRエンジン: {ocr} {get_ocr_version(ocr, ocr_executable)}\n")
         fp.write(f"解像度: {dpi} DPI\n")
+        if ocr == "ndlocr-lite":
+            fp.write(f"NDL OCR-Lite det-conf-threshold: {det_conf_threshold:.2f}\n")
         fp.write(f"エッジ強調: {edge_level}\n")
         fp.write("=" * 80 + "\n")
         fp.write(f"入力PDF: {pdf_path}\n")

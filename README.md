@@ -272,6 +272,7 @@ device=cpu
 edge1=1.0,100,0
 edge2=2.0,150,0
 edge3=3.0,200,0
+det_conf_threshold = 0.3
 ```
 
 `ocr` の値は `tesseract` または `ndlocr-lite` を指定します。使用するOCRエンジンがインストールされ、コマンドから実行できる状態であることを確認してください。
@@ -335,6 +336,9 @@ edge1=1.0,100,0
 edge2=2.0,150,0
 edge3=3.0,200,0
 
+; det_conf_threshold 設定範囲=0.0～1.0。 文字領域の検出信頼度のしきい値を指定します。
+det_conf_threshold = 0.3
+
 [出力]
 文字コード=utf-8
 ```
@@ -364,6 +368,7 @@ edge3=3.0,200,0
 | edge1 | エッジ強調レベル1のパラメータです。`Radius, Percent, Threshold` の順に指定します。 |
 | edge2 | エッジ強調レベル2のパラメータです。`Radius, Percent, Threshold` の順に指定します。 |
 | edge3 | エッジ強調レベル3のパラメータです。`Radius, Percent, Threshold` の順に指定します。 |
+| det_conf_threshold | 文字領域の検出信頼度のしきい値を指定します。設定範囲=0.0～1.0。指定値未満の検出結果は除外されます。値を小さくすると検出対象が増え、大きくすると信頼度の低い検出結果を除外できます。 |
 
 ### [出力] セクション
 
